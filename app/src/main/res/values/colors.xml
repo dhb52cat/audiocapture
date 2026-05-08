@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="background">#0F1117</color>
+    <color name="card_background">#1E2130</color>
+    <color name="title_color">#FFFFFF</color>
+    <color name="subtitle_color">#8890A4</color>
+    <color name="hint_color">#555F72</color>
+    <color name="start_color">#E84343</color>
+    <color name="stop_color">#444D60</color>
+    <color name="recording_color">#FF4444</color>
+    <color name="ready_color">#8890A4</color>
+    <color name="accent">#E84343</color>
+</resources>

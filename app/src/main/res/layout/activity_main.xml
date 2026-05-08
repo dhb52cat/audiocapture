@@ -1,0 +1,293 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background"
+    android:fillViewport="true">
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingBottom="32dp">
+
+        <!-- 标题 -->
+        <TextView
+            android:id="@+id/tvTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="系统音频录制"
+            android:textSize="26sp"
+            android:textStyle="bold"
+            android:textColor="@color/title_color"
+            android:layout_marginTop="48dp"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent" />
+
+        <TextView
+            android:id="@+id/tvSubtitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="录制手机播放的任何声音"
+            android:textSize="14sp"
+            android:textColor="@color/subtitle_color"
+            android:layout_marginTop="6dp"
+            app:layout_constraintTop_toBottomOf="@id/tvTitle"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent" />
+
+        <!-- 状态卡片 -->
+        <androidx.cardview.widget.CardView
+            xmlns:card_view="http://schemas.android.com/apk/res-auto"
+            android:id="@+id/cardStatus"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginHorizontal="24dp"
+            android:layout_marginTop="28dp"
+            card_view:cardCornerRadius="20dp"
+            card_view:cardElevation="8dp"
+            card_view:cardBackgroundColor="@color/card_background"
+            app:layout_constraintTop_toBottomOf="@id/tvSubtitle"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="24dp"
+                android:gravity="center">
+
+                <TextView
+                    android:id="@+id/tvStatus"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="准备就绪"
+                    android:textSize="15sp"
+                    android:textColor="@color/ready_color" />
+
+                <TextView
+                    android:id="@+id/tvTimer"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="00:00"
+                    android:textSize="52sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/title_color"
+                    android:fontFamily="monospace"
+                    android:layout_marginTop="4dp" />
+
+                <com.audiocapture.WaveformView
+                    android:id="@+id/waveView"
+                    android:layout_width="match_parent"
+                    android:layout_height="56dp"
+                    android:layout_marginTop="8dp" />
+
+                <!-- 分割计数（录制中显示） -->
+                <TextView
+                    android:id="@+id/tvSplitCount"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="已分割 0 个文件"
+                    android:textSize="13sp"
+                    android:textColor="@color/accent"
+                    android:layout_marginTop="6dp"
+                    android:visibility="gone" />
+
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <!-- 开始/停止按钮 -->
+        <Button
+            android:id="@+id/btnRecord"
+            android:layout_width="0dp"
+            android:layout_height="60dp"
+            android:layout_marginHorizontal="24dp"
+            android:layout_marginTop="20dp"
+            android:text="● 开始录音"
+            android:textSize="17sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF"
+            android:backgroundTint="@color/start_color"
+            android:stateListAnimator="@null"
+            style="@style/Widget.MaterialComponents.Button"
+            app:cornerRadius="16dp"
+            app:layout_constraintTop_toBottomOf="@id/cardStatus"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent" />
+
+        <!-- 手动分割按钮 -->
+        <Button
+            android:id="@+id/btnSplit"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_marginHorizontal="24dp"
+            android:layout_marginTop="10dp"
+            android:text="✂️ 手动分割新文件"
+            android:textSize="15sp"
+            android:textColor="@color/title_color"
+            android:backgroundTint="@color/card_background"
+            android:enabled="false"
+            android:alpha="0.4"
+            android:stateListAnimator="@null"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            app:cornerRadius="14dp"
+            app:layout_constraintTop_toBottomOf="@id/btnRecord"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent" />
+
+        <!-- 设置区域（录制时隐藏） -->
+        <LinearLayout
+            android:id="@+id/layoutSettings"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginHorizontal="24dp"
+            android:layout_marginTop="16dp"
+            app:layout_constraintTop_toBottomOf="@id/btnSplit"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent">
+
+            <!-- 静音检测卡片 -->
+            <androidx.cardview.widget.CardView
+                xmlns:card_view="http://schemas.android.com/apk/res-auto"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                card_view:cardCornerRadius="16dp"
+                card_view:cardElevation="4dp"
+                card_view:cardBackgroundColor="@color/card_background">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="18dp">
+
+                    <!-- 开关行 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="静音自动分割"
+                                android:textSize="15sp"
+                                android:textStyle="bold"
+                                android:textColor="@color/title_color" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="检测到静音时自动保存新文件"
+                                android:textSize="12sp"
+                                android:textColor="@color/subtitle_color"
+                                android:layout_marginTop="2dp" />
+
+                        </LinearLayout>
+
+                        <androidx.appcompat.widget.SwitchCompat
+                            android:id="@+id/switchSilence"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:checked="true" />
+
+                    </LinearLayout>
+
+                    <!-- 间隔设置（开关开启时显示） -->
+                    <LinearLayout
+                        android:id="@+id/layoutSilenceConfig"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:layout_marginTop="12dp">
+
+                        <Button
+                            android:id="@+id/btnSilenceConfig"
+                            android:layout_width="match_parent"
+                            android:layout_height="44dp"
+                            android:text="静音间隔：1.5 秒"
+                            android:textSize="14sp"
+                            android:textColor="@color/accent"
+                            android:backgroundTint="#2A1E2130"
+                            android:stateListAnimator="@null"
+                            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                            app:cornerRadius="10dp" />
+
+                    </LinearLayout>
+
+                </LinearLayout>
+            </androidx.cardview.widget.CardView>
+
+        </LinearLayout>
+
+        <!-- 文件信息卡片 -->
+        <androidx.cardview.widget.CardView
+            xmlns:card_view="http://schemas.android.com/apk/res-auto"
+            android:id="@+id/cardFiles"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginHorizontal="24dp"
+            android:layout_marginTop="12dp"
+            card_view:cardCornerRadius="16dp"
+            card_view:cardElevation="4dp"
+            card_view:cardBackgroundColor="@color/card_background"
+            app:layout_constraintTop_toBottomOf="@id/layoutSettings"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="18dp">
+
+                <TextView
+                    android:id="@+id/tvRecordingCount"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="共 0 个录音文件"
+                    android:textSize="13sp"
+                    android:textColor="@color/subtitle_color" />
+
+                <TextView
+                    android:id="@+id/tvLastFile"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="尚无录音"
+                    android:textSize="12sp"
+                    android:textColor="@color/subtitle_color"
+                    android:layout_marginTop="3dp"
+                    android:ellipsize="end"
+                    android:maxLines="1" />
+
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <!-- 底部说明 -->
+        <TextView
+            android:id="@+id/tvHint"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:text="⚠️ 部分音乐App（如Spotify）可能禁止被录制\n录音保存至 Android/data/com.audiocapture/files/Recordings"
+            android:textSize="11sp"
+            android:textColor="@color/hint_color"
+            android:gravity="center"
+            android:layout_marginHorizontal="24dp"
+            android:layout_marginTop="16dp"
+            app:layout_constraintTop_toBottomOf="@id/cardFiles"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent" />
+
+    </androidx.constraintlayout.widget.ConstraintLayout>
+</ScrollView>
