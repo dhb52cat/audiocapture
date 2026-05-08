@@ -55,6 +55,8 @@ class AudioCaptureService : Service() {
     private var silenceEnabled = true
     private var silenceThresholdMs = 1500L
     private var silenceSince = 0L
+    private var isRecordingStarted = false  // 是否真正开始录音（检测到声音）
+    private var audioStartTime = 0L  // 开始录音的时间
 
     private val handler = Handler(Looper.getMainLooper())
 
@@ -84,7 +86,11 @@ class AudioCaptureService : Service() {
                 }
             }
             ACTION_STOP -> stopCapture()
-            ACTION_SPLIT -> splitRequested = true
+            ACTION_SPLIT -> {
+                if (isRecordingStarted) {
+                    splitRequested = true
+                }
+            }
         }
         return START_NOT_STICKY
     }
@@ -121,8 +127,8 @@ class AudioCaptureService : Service() {
             }
 
             fileIndex = 1
-            currentFilePath = nextFilePath()
-            setupEncoder(currentFilePath)
+            isRecordingStarted = false
+            audioStartTime = 0L
 
             audioRecord?.startRecording()
             isRecording = true
@@ -151,52 +157,97 @@ class AudioCaptureService : Service() {
             val bytesRead = audioRecord?.read(inputBuffer, 0, bufferSize) ?: 0
             if (bytesRead <= 0) continue
 
-            // 判断是否需要分割
-            val shouldSplit = splitRequested ||
-                    (silenceEnabled && checkSilence(inputBuffer, bytesRead))
+            // 检测当前音量
+            val amplitude = calculateAmplitude(inputBuffer, bytesRead)
+            val now = SystemClock.elapsedRealtime()
 
-            if (shouldSplit) {
-                splitRequested = false
-                silenceSince = 0L
-
-                // 保存当前文件
-                val savedPath = currentFilePath
-                flushAndCloseMuxer(bufferInfo, muxerStarted, audioTrackIndex, presentationTimeUs)
-                notifyFileSplit(savedPath)
-
-                // 开新文件
-                fileIndex++
-                currentFilePath = nextFilePath()
-                presentationTimeUs = 0L
-                muxerStarted = false
-                audioTrackIndex = -1
-                setupEncoder(currentFilePath)
+            // 逻辑：如果还没开始录音，静音时等待，有声音时开始
+            if (!isRecordingStarted) {
+                if (amplitude >= SILENCE_AMPLITUDE_THRESHOLD) {
+                    // 开始录音
+                    isRecordingStarted = true
+                    audioStartTime = now
+                    currentFilePath = nextFilePath()
+                    setupEncoder(currentFilePath)
+                    presentationTimeUs = 0L
+                    muxerStarted = false
+                    audioTrackIndex = -1
+                } else {
+                    // 静音等待，不做任何处理
+                    continue
+                }
             }
 
-            // 送入编码器
-            val inputIdx = mediaCodec?.dequeueInputBuffer(10_000) ?: -1
-            if (inputIdx >= 0) {
-                val buf = mediaCodec?.getInputBuffer(inputIdx)
-                buf?.clear()
-                buf?.put(inputBuffer, 0, bytesRead)
-                presentationTimeUs += (bytesRead.toLong() * 1_000_000L) / bytesPerSecond
-                mediaCodec?.queueInputBuffer(inputIdx, 0, bytesRead, presentationTimeUs, 0)
-            }
+            // 已开始录音后的处理
+            if (isRecordingStarted) {
+                // 判断是否需要分割（手动分割 或 静音分割）
+                val shouldSplit = splitRequested ||
+                        (silenceEnabled && checkSilence(inputBuffer, bytesRead))
 
-            // drain 输出
-            val result = drainEncoder(bufferInfo, muxerStarted, audioTrackIndex)
-            muxerStarted = result.first
-            audioTrackIndex = result.second
+                if (shouldSplit) {
+                    splitRequested = false
+                    silenceSince = 0L
+
+                    // 只有录音时长超过1秒才保存文件
+                    if (SystemClock.elapsedRealtime() - audioStartTime > 1000) {
+                        val savedPath = currentFilePath
+                        flushAndCloseMuxer(bufferInfo, muxerStarted, audioTrackIndex, presentationTimeUs)
+                        notifyFileSplit(savedPath)
+                        fileIndex++
+                    }
+
+                    // 开新文件
+                    currentFilePath = nextFilePath()
+                    setupEncoder(currentFilePath)
+                    audioStartTime = SystemClock.elapsedRealtime()
+                    presentationTimeUs = 0L
+                    muxerStarted = false
+                    audioTrackIndex = -1
+                }
+
+                // 送入编码器
+                val inputIdx = mediaCodec?.dequeueInputBuffer(10_000) ?: -1
+                if (inputIdx >= 0) {
+                    val buf = mediaCodec?.getInputBuffer(inputIdx)
+                    buf?.clear()
+                    buf?.put(inputBuffer, 0, bytesRead)
+                    presentationTimeUs += (bytesRead.toLong() * 1_000_000L) / bytesPerSecond
+                    mediaCodec?.queueInputBuffer(inputIdx, 0, bytesRead, presentationTimeUs, 0)
+                }
+
+                // drain 输出
+                val result = drainEncoder(bufferInfo, muxerStarted, audioTrackIndex)
+                muxerStarted = result.first
+                audioTrackIndex = result.second
+            }
         }
 
         // EOS
-        val eosIdx = mediaCodec?.dequeueInputBuffer(10_000) ?: -1
-        if (eosIdx >= 0) {
-            mediaCodec?.queueInputBuffer(eosIdx, 0, 0, presentationTimeUs,
-                MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+        if (isRecordingStarted && mediaCodec != null) {
+            val eosIdx = mediaCodec?.dequeueInputBuffer(10_000) ?: -1
+            if (eosIdx >= 0) {
+                mediaCodec?.queueInputBuffer(eosIdx, 0, 0, presentationTimeUs,
+                    MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+            }
+            drainUntilEOS(bufferInfo, muxerStarted, audioTrackIndex)
         }
-        drainUntilEOS(bufferInfo, muxerStarted, audioTrackIndex)
         releaseResources()
+    }
+
+    // ----------------------------------------------------------------
+    // 计算振幅
+    // ----------------------------------------------------------------
+    private fun calculateAmplitude(buffer: ByteArray, bytesRead: Int): Long {
+        var sum = 0L
+        var count = 0
+        var i = 0
+        while (i + 1 < bytesRead) {
+            val sample = ((buffer[i + 1].toInt() shl 8) or (buffer[i].toInt() and 0xFF)).toShort()
+            sum += abs(sample.toInt())
+            count++
+            i += 2
+        }
+        return if (count > 0) sum / count else 0L
     }
 
     // ----------------------------------------------------------------
@@ -324,6 +375,9 @@ class AudioCaptureService : Service() {
     }
 
     private fun setupEncoder(filePath: String) {
+        try { mediaCodec?.stop(); mediaCodec?.release() } catch (_: Exception) {}
+        try { mediaMuxer?.stop(); mediaMuxer?.release() } catch (_: Exception) {}
+        
         val mime = MediaFormat.MIMETYPE_AUDIO_AAC
         val format = MediaFormat.createAudioFormat(mime, SAMPLE_RATE, 2).apply {
             setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
@@ -341,7 +395,8 @@ class AudioCaptureService : Service() {
         if (!dir.exists()) dir.mkdirs()
         val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault())
             .format(java.util.Date())
-        return java.io.File(dir, "录音${fileIndex}_${stamp}.m4a").absolutePath
+        val nanoTime = System.nanoTime() % 1000000
+        return java.io.File(dir, "录音${fileIndex}_${stamp}_${nanoTime}.m4a").absolutePath
     }
 
     private fun notifyFileSplit(savedPath: String) {
@@ -356,6 +411,7 @@ class AudioCaptureService : Service() {
         isRecording = false
         recordingThread?.join(4000)
         recordingThread = null
+        isRecordingStarted = false
     }
 
     private fun releaseResources() {

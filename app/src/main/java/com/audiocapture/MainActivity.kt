@@ -32,6 +32,7 @@ class MainActivity : AppCompatActivity() {
 
     // 已分割的文件列表
     private val splitFiles = mutableListOf<String>()
+    private var hasRecordingStarted = false  // 标记是否真正开始过录音
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -56,6 +57,7 @@ class MainActivity : AppCompatActivity() {
                 AudioCaptureService.ACTION_RECORDING_STARTED -> {
                     isRecording = true
                     splitFiles.clear()
+                    hasRecordingStarted = true
                     updateUI()
                     startTimer()
                 }
@@ -63,10 +65,13 @@ class MainActivity : AppCompatActivity() {
                     isRecording = false
                     updateUI()
                     stopTimer()
-                    val path = intent.getStringExtra(AudioCaptureService.EXTRA_FILE_PATH)
-                    if (path != null) splitFiles.add(path)
-                    refreshRecordingList()
-                    showToast("录音已停止，共保存 ${splitFiles.size} 个文件")
+                    if (hasRecordingStarted) {
+                        hasRecordingStarted = false
+                        val path = intent.getStringExtra(AudioCaptureService.EXTRA_FILE_PATH)
+                        if (path != null) splitFiles.add(path)
+                        refreshRecordingList()
+                        showToast("录音已停止，共保存 ${splitFiles.size} 个文件")
+                    }
                 }
                 AudioCaptureService.ACTION_FILE_SPLIT -> {
                     val path = intent.getStringExtra(AudioCaptureService.EXTRA_FILE_PATH)
@@ -258,7 +263,7 @@ class MainActivity : AppCompatActivity() {
                 handler.postDelayed(this, 500)
             }
         }
-        handler.post(timerRunnable!!)
+        timerRunnable?.let { handler.post(it) }
     }
 
     private fun stopTimer() {
