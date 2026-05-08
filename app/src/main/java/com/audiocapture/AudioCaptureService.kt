@@ -405,7 +405,6 @@ private var lastWrittenPts = 0L
         }
         try { mediaMuxer?.stop(); mediaMuxer?.release() } catch (_: Exception) {}
         mediaMuxer = null
-        bufferedBytes = 0L
     }
 
     private fun setupEncoder(filePath: String) {
