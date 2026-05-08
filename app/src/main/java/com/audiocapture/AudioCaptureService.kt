@@ -229,6 +229,11 @@ class AudioCaptureService : Service() {
                 val result = drainEncoder(bufferInfo, muxerStarted, audioTrackIndex)
                 muxerStarted = result.first
                 audioTrackIndex = result.second
+
+                // 更新最终状态
+                muxerStartedForLastFile = muxerStarted
+                audioTrackIndexForLastFile = audioTrackIndex
+                finalPresentationTimeUs = presentationTimeUs
             }
         }
 
@@ -430,14 +435,38 @@ class AudioCaptureService : Service() {
         isRecording = false
         recordingThread?.join(4000)
         recordingThread = null
-        isRecordingStarted = false
     }
+
+    private var muxerStartedForLastFile = false
+    private var audioTrackIndexForLastFile = -1
+    private var finalPresentationTimeUs = 0L
 
     private fun releaseResources() {
         try { audioRecord?.stop(); audioRecord?.release() } catch (_: Exception) {}
         audioRecord = null
         try { mediaProjection?.stop() } catch (_: Exception) {}
         mediaProjection = null
+
+        // 如果正在录音且有有效数据，保存最后文件
+        if (isRecordingStarted && currentFilePath.isNotEmpty() && mediaCodec != null) {
+            val recordingDuration = SystemClock.elapsedRealtime() - audioStartTime
+            if (recordingDuration > 3000) {
+                // 发送 EOS 并 drain 所有剩余数据
+                val eosIdx = mediaCodec?.dequeueInputBuffer(10_000) ?: -1
+                if (eosIdx >= 0) {
+                    mediaCodec?.queueInputBuffer(eosIdx, 0, 0, finalPresentationTimeUs,
+                        MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                }
+                val bufferInfo = MediaCodec.BufferInfo()
+                drainUntilEOS(bufferInfo, muxerStartedForLastFile, audioTrackIndexForLastFile)
+                notifyFileSplit(currentFilePath)
+            } else {
+                // 录音时间太短，删除空文件
+                java.io.File(currentFilePath).delete()
+            }
+        }
+
+        isRecordingStarted = false
 
         handler.post {
             sendBroadcast(Intent(ACTION_RECORDING_STOPPED).apply {
