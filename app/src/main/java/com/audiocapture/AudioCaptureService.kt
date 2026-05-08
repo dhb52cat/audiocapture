@@ -171,7 +171,10 @@ class AudioCaptureService : Service() {
 
         while (isRecording) {
             val bytesRead = audioRecord?.read(inputBuffer, 0, bufferSize) ?: 0
-            if (bytesRead <= 0) continue
+            if (bytesRead <= 0) {
+                try { Thread.sleep(10) } catch (_: Exception) {}
+                continue
+            }
 
             // 检测当前音量
             val amplitude = calculateAmplitude(inputBuffer, bytesRead)
