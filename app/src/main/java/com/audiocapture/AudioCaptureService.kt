@@ -65,10 +65,11 @@ class AudioCaptureService : Service() {
     private var audioDetectedTime = 0L  // 检测到声音的时间，用于确认阶段
     private val audioConfirmDurationMs = 500L  // 确认需要持续500ms有声音
 
-    // 缓冲写入相关
+// 缓冲写入相关
     private val bufferFlushThreshold = 500 * 1024  // 500KB 触发写入
-    private var outputBuffer = mutableListOf<ByteArray>()
-    private var bufferSize = 0L
+    private data class BufferedData(val data: ByteArray, val pts: Long)
+    private val outputBuffer = mutableListOf<BufferedData>()
+    private var lastWrittenPts = 0L  // 上次写入的时间戳
 
     private val handler = Handler(Looper.getMainLooper())
 
@@ -357,10 +358,10 @@ class AudioCaptureService : Service() {
                         (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) &&
                         bufferInfo.size > 0
                     ) {
-                        // 复制数据到缓冲区
+                        // 复制数据到缓冲区，保存时间戳
                         val data = ByteArray(bufferInfo.size)
                         outputBuf.get(data)
-                        outputBuffer.add(data)
+                        outputBuffer.add(BufferedData(data, bufferInfo.presentationTimeUs))
                         bufferSize += bufferInfo.size
 
                         // 达到阈值时写入文件
@@ -383,15 +384,19 @@ class AudioCaptureService : Service() {
         if (outputBuffer.isEmpty() || mediaMuxer == null) return
 
         try {
-            for (data in outputBuffer) {
+            var currentPts = lastWrittenPts
+            for (buffered in outputBuffer) {
                 val info = MediaCodec.BufferInfo().apply {
                     offset = 0
-                    size = data.size
-                    presentationTimeUs = 0
+                    size = buffered.data.size
+                    presentationTimeUs = currentPts
                     flags = 0
                 }
-                mediaMuxer?.writeSampleData(trackIndex, ByteBuffer.wrap(data), info)
+                mediaMuxer?.writeSampleData(trackIndex, ByteBuffer.wrap(buffered.data), info)
+                // 估算下一帧的时间戳（假设帧率）
+                currentPts += (buffered.data.size * 1_000_000L) / (SAMPLE_RATE * 2 * 2)
             }
+            lastWrittenPts = currentPts
         } catch (_: Exception) {}
         outputBuffer.clear()
         bufferSize = 0L
@@ -424,10 +429,10 @@ class AudioCaptureService : Service() {
                         (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) &&
                         bufferInfo.size > 0
                     ) {
-                        // 复制数据到缓冲区
+                        // 复制数据到缓冲区，保存时间戳
                         val data = ByteArray(bufferInfo.size)
                         outputBuf.get(data)
-                        outputBuffer.add(data)
+                        outputBuffer.add(BufferedData(data, bufferInfo.presentationTimeUs))
                         bufferSize += bufferInfo.size
                     }
                     mediaCodec?.releaseOutputBuffer(outputIdx, false)
@@ -466,6 +471,7 @@ class AudioCaptureService : Service() {
         // 清空缓冲区
         outputBuffer.clear()
         bufferSize = 0L
+        lastWrittenPts = 0L
     }
 
     private fun nextFilePath(): String {
