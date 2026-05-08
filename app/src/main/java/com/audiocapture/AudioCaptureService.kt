@@ -416,19 +416,30 @@ class AudioCaptureService : Service() {
 
     private fun notifyFileSplit(savedPath: String) {
         // 延迟检查文件大小，确保文件完全写入
+        // 同时立即删除小于最小大小的文件
+        val file = java.io.File(savedPath)
+        if (minFileSizeBytes > 0 && file.exists()) {
+            val currentSize = file.length()
+            if (currentSize < minFileSizeBytes) {
+                file.delete()
+                return
+            }
+        }
+
+        // 如果文件存在且大小足够，延迟后再次确认
         handler.postDelayed({
-            val file = java.io.File(savedPath)
-            val fileSize = if (file.exists()) file.length() else 0L
+            val f = java.io.File(savedPath)
+            val fileSize = if (f.exists()) f.length() else 0L
 
             if (minFileSizeBytes > 0 && fileSize < minFileSizeBytes) {
-                file.delete()
+                f.delete()
                 return@postDelayed
             }
 
             sendBroadcast(Intent(ACTION_FILE_SPLIT).apply {
                 putExtra(EXTRA_FILE_PATH, savedPath)
             })
-        }, 500)
+        }, 1000)
     }
 
     private fun stopCapture() {
