@@ -67,12 +67,10 @@ class AudioCaptureService : Service() {
     private val audioConfirmDurationMs = 500L  // 确认需要持续500ms有声音
 
 // 缓冲写入相关
-    private val bufferFlushThreshold = 500 * 1024  // 500KB 触发写入
+    private val bufferFlushThreshold = 256 * 1024  // 256KB 触发写入
     private val outputBuffer = ByteArrayOutputStream()
     private var bufferedBytes = 0L
     private var lastWrittenPts = 0L
-    private var writeThread: Thread? = null
-    private val writeLock = Object()
 
     private val handler = Handler(Looper.getMainLooper())
 
@@ -369,7 +367,7 @@ class AudioCaptureService : Service() {
 
                         // 达到阈值时写入文件
                         if (bufferedBytes >= bufferFlushThreshold) {
-                            flushBufferToFileAsync(trackIndex)
+                            flushBuffer(trackIndex)
                         }
                     }
                     mediaCodec?.releaseOutputBuffer(outputIdx, false)
@@ -381,67 +379,24 @@ class AudioCaptureService : Service() {
     }
 
     // ----------------------------------------------------------------
-    // 将缓冲区数据写入文件（异步，在子线程执行）
+    // 将缓冲区数据写入文件
     // ----------------------------------------------------------------
-    private fun flushBufferToFileAsync(trackIndex: Int) {
-        synchronized(writeLock) {
-            if (bufferedBytes < bufferFlushThreshold || mediaMuxer == null) return
-            
-            val dataToWrite = outputBuffer.toByteArray()
-            val pts = lastWrittenPts
-            outputBuffer.reset()
-            bufferedBytes = 0L
-            
-            // 在子线程写入，避免阻塞主线程
-            writeThread = Thread {
-                try {
-                    if (mediaMuxer == null) return@Thread
-                    var currentPts = pts
-                    var offset = 0
-                    val chunkSize = 8192  // 分块写入
-                    
-                    while (offset < dataToWrite.size) {
-                        val len = minOf(chunkSize, dataToWrite.size - offset)
-                        val chunk = dataToWrite.copyOfRange(offset, offset + len)
-                        val info = MediaCodec.BufferInfo().apply {
-                            offset = 0
-                            size = len
-                            presentationTimeUs = currentPts
-                            flags = 0
-                        }
-                        mediaMuxer?.writeSampleData(trackIndex, ByteBuffer.wrap(chunk), info)
-                        currentPts += (len * 1_000_000L) / (SAMPLE_RATE * 2 * 2)
-                        offset += len
-                    }
-                    lastWrittenPts = currentPts
-                } catch (_: Exception) {}
-            }.apply { start() }
-        }
-    }
-    
-    // ----------------------------------------------------------------
-    // 同步写入缓冲区（用于分割和结束时的最终写入）
-    // ----------------------------------------------------------------
-    private fun flushBufferToFileSync(trackIndex: Int) {
-        // 等待之前的异步写入完成
-        writeThread?.join()
+    private fun flushBuffer(trackIndex: Int) {
+        if (bufferedBytes == 0L || mediaMuxer == null) return
         
-        synchronized(writeLock) {
-            if (bufferedBytes == 0L || mediaMuxer == null) return
+        val dataToWrite = outputBuffer.toByteArray()
+        val pts = lastWrittenPts
+        outputBuffer.reset()
+        bufferedBytes = 0L
+        
+        try {
+            var currentPts = pts
+            var offset = 0
+            val chunkSize = 4096  // 4KB 块写入
             
-            val dataToWrite = outputBuffer.toByteArray()
-            val pts = lastWrittenPts
-            outputBuffer.reset()
-            bufferedBytes = 0L
-            
-            try {
-                var currentPts = pts
-                var offset = 0
-                val chunkSize = 8192
-                
-                while (offset < dataToWrite.size) {
-                    val len = minOf(chunkSize, dataToWrite.size - offset)
-                    val chunk = dataToWrite.copyOfRange(offset, offset + len)
+            while (offset < dataToWrite.size) {
+                val len = minOf(chunkSize, dataToWrite.size - offset)
+                val chunk = dataToWrite.copyOfRange(offset, offset + len)
                     val info = MediaCodec.BufferInfo().apply {
                         offset = 0
                         size = len
@@ -498,17 +453,14 @@ class AudioCaptureService : Service() {
                 else -> eosReached = true
             }
         }
-        // 刷新剩余缓冲区（同步）
+        // 刷新剩余缓冲区
         if (trackIndex >= 0) {
-            flushBufferToFileSync(trackIndex)
+            flushBuffer(trackIndex)
         }
         try { mediaMuxer?.stop(); mediaMuxer?.release() } catch (_: Exception) {}
         mediaMuxer = null
-        writeThread?.join()
-        synchronized(writeLock) {
-            outputBuffer.reset()
-            bufferedBytes = 0L
-        }
+        outputBuffer.reset()
+        bufferedBytes = 0L
     }
 
     private fun setupEncoder(filePath: String) {
@@ -527,12 +479,9 @@ class AudioCaptureService : Service() {
         mediaMuxer = MediaMuxer(filePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
         
         // 清空缓冲区
-        writeThread?.join()
-        synchronized(writeLock) {
-            outputBuffer.reset()
-            bufferedBytes = 0L
-            lastWrittenPts = 0L
-        }
+        outputBuffer.reset()
+        bufferedBytes = 0L
+        lastWrittenPts = 0L
     }
 
     private fun nextFilePath(): String {
