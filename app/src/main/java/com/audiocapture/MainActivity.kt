@@ -28,12 +28,12 @@ class MainActivity : AppCompatActivity() {
 
     // 静音检测设置
     private var silenceEnabled = true
-    private var silenceThresholdMs = 1500L  // 默认1.5秒
+    private var silenceThresholdMs = 500L  // 默认0.5秒
 
-    // 最小文件大小设置（字节），默认 10KB
-    private var minFileSizeBytes = 10 * 1024L
-    private val minFileSizeOptions = arrayOf("不限制", "5 KB", "10 KB", "20 KB", "50 KB", "100 KB")
-    private val minFileSizeValues = longArrayOf(0, 5 * 1024L, 10 * 1024L, 20 * 1024L, 50 * 1024L, 100 * 1024L)
+    // 最小文件大小设置（字节），默认 1MB
+    private var minFileSizeBytes = 1 * 1024 * 1024L
+    private val minFileSizeOptions = arrayOf("不限制", "5 KB", "10 KB", "20 KB", "50 KB", "100 KB", "1 兆")
+    private val minFileSizeValues = longArrayOf(0, 5 * 1024L, 10 * 1024L, 20 * 1024L, 50 * 1024L, 100 * 1024L, 1 * 1024 * 1024L)
 
     // 已分割的文件列表
     private val splitFiles = mutableListOf<String>()
