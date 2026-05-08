@@ -7,6 +7,7 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.*
 import androidx.core.app.NotificationCompat
+import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import kotlin.math.abs
 
@@ -67,10 +68,11 @@ class AudioCaptureService : Service() {
 
 // 缓冲写入相关
     private val bufferFlushThreshold = 500 * 1024  // 500KB 触发写入
-    private data class BufferedData(val data: ByteArray, val pts: Long)
-    private val outputBuffer = mutableListOf<BufferedData>()
-    private var bufferedBytes = 0L  // 缓冲区累计字节数
-    private var lastWrittenPts = 0L  // 上次写入的时间戳
+    private val outputBuffer = ByteArrayOutputStream()
+    private var bufferedBytes = 0L
+    private var lastWrittenPts = 0L
+    private var writeThread: Thread? = null
+    private val writeLock = Object()
 
     private val handler = Handler(Looper.getMainLooper())
 
@@ -359,15 +361,15 @@ class AudioCaptureService : Service() {
                         (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) &&
                         bufferInfo.size > 0
                     ) {
-                        // 复制数据到缓冲区，保存时间戳
+                        // 直接写入缓冲区
                         val data = ByteArray(bufferInfo.size)
                         outputBuf.get(data)
-                        outputBuffer.add(BufferedData(data, bufferInfo.presentationTimeUs))
+                        outputBuffer.write(data)
                         bufferedBytes += bufferInfo.size
 
                         // 达到阈值时写入文件
                         if (bufferedBytes >= bufferFlushThreshold) {
-                            flushBufferToFile(trackIndex)
+                            flushBufferToFileAsync(trackIndex)
                         }
                     }
                     mediaCodec?.releaseOutputBuffer(outputIdx, false)
@@ -379,28 +381,80 @@ class AudioCaptureService : Service() {
     }
 
     // ----------------------------------------------------------------
-    // 将缓冲区数据写入文件
+    // 将缓冲区数据写入文件（异步，在子线程执行）
     // ----------------------------------------------------------------
-    private fun flushBufferToFile(trackIndex: Int) {
-        if (outputBuffer.isEmpty() || mediaMuxer == null) return
-
-        try {
-            var currentPts = lastWrittenPts
-            for (buffered in outputBuffer) {
-                val info = MediaCodec.BufferInfo().apply {
-                    offset = 0
-                    size = buffered.data.size
-                    presentationTimeUs = currentPts
-                    flags = 0
+    private fun flushBufferToFileAsync(trackIndex: Int) {
+        synchronized(writeLock) {
+            if (bufferedBytes < bufferFlushThreshold || mediaMuxer == null) return
+            
+            val dataToWrite = outputBuffer.toByteArray()
+            val pts = lastWrittenPts
+            outputBuffer.reset()
+            bufferedBytes = 0L
+            
+            // 在子线程写入，避免阻塞主线程
+            writeThread = Thread {
+                try {
+                    if (mediaMuxer == null) return@Thread
+                    var currentPts = pts
+                    var offset = 0
+                    val chunkSize = 8192  // 分块写入
+                    
+                    while (offset < dataToWrite.size) {
+                        val len = minOf(chunkSize, dataToWrite.size - offset)
+                        val chunk = dataToWrite.copyOfRange(offset, offset + len)
+                        val info = MediaCodec.BufferInfo().apply {
+                            offset = 0
+                            size = len
+                            presentationTimeUs = currentPts
+                            flags = 0
+                        }
+                        mediaMuxer?.writeSampleData(trackIndex, ByteBuffer.wrap(chunk), info)
+                        currentPts += (len * 1_000_000L) / (SAMPLE_RATE * 2 * 2)
+                        offset += len
+                    }
+                    lastWrittenPts = currentPts
+                } catch (_: Exception) {}
+            }.apply { start() }
+        }
+    }
+    
+    // ----------------------------------------------------------------
+    // 同步写入缓冲区（用于分割和结束时的最终写入）
+    // ----------------------------------------------------------------
+    private fun flushBufferToFileSync(trackIndex: Int) {
+        // 等待之前的异步写入完成
+        writeThread?.join()
+        
+        synchronized(writeLock) {
+            if (bufferedBytes == 0L || mediaMuxer == null) return
+            
+            val dataToWrite = outputBuffer.toByteArray()
+            val pts = lastWrittenPts
+            outputBuffer.reset()
+            bufferedBytes = 0L
+            
+            try {
+                var currentPts = pts
+                var offset = 0
+                val chunkSize = 8192
+                
+                while (offset < dataToWrite.size) {
+                    val len = minOf(chunkSize, dataToWrite.size - offset)
+                    val chunk = dataToWrite.copyOfRange(offset, offset + len)
+                    val info = MediaCodec.BufferInfo().apply {
+                        offset = 0
+                        size = len
+                        presentationTimeUs = currentPts
+                        flags = 0
+                    }
+                    mediaMuxer?.writeSampleData(trackIndex, ByteBuffer.wrap(chunk), info)
+                    currentPts += (len * 1_000_000L) / (SAMPLE_RATE * 2 * 2)
+                    offset += len
                 }
-                mediaMuxer?.writeSampleData(trackIndex, ByteBuffer.wrap(buffered.data), info)
-                // 估算下一帧的时间戳（假设帧率）
-                currentPts += (buffered.data.size * 1_000_000L) / (SAMPLE_RATE * 2 * 2)
-            }
-            lastWrittenPts = currentPts
-        } catch (_: Exception) {}
-        outputBuffer.clear()
-        bufferedBytes = 0L
+                lastWrittenPts = currentPts
+            } catch (_: Exception) {}
+        }
     }
 
     // ----------------------------------------------------------------
@@ -430,10 +484,10 @@ class AudioCaptureService : Service() {
                         (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) &&
                         bufferInfo.size > 0
                     ) {
-                        // 复制数据到缓冲区，保存时间戳
+                        // 直接写入缓冲区
                         val data = ByteArray(bufferInfo.size)
                         outputBuf.get(data)
-                        outputBuffer.add(BufferedData(data, bufferInfo.presentationTimeUs))
+                        outputBuffer.write(data)
                         bufferedBytes += bufferInfo.size
                     }
                     mediaCodec?.releaseOutputBuffer(outputIdx, false)
@@ -444,14 +498,17 @@ class AudioCaptureService : Service() {
                 else -> eosReached = true
             }
         }
-        // 刷新剩余缓冲区
+        // 刷新剩余缓冲区（同步）
         if (trackIndex >= 0) {
-            flushBufferToFile(trackIndex)
+            flushBufferToFileSync(trackIndex)
         }
         try { mediaMuxer?.stop(); mediaMuxer?.release() } catch (_: Exception) {}
         mediaMuxer = null
-        outputBuffer.clear()
-        bufferedBytes = 0L
+        writeThread?.join()
+        synchronized(writeLock) {
+            outputBuffer.reset()
+            bufferedBytes = 0L
+        }
     }
 
     private fun setupEncoder(filePath: String) {
@@ -470,9 +527,12 @@ class AudioCaptureService : Service() {
         mediaMuxer = MediaMuxer(filePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
         
         // 清空缓冲区
-        outputBuffer.clear()
-        bufferedBytes = 0L
-        lastWrittenPts = 0L
+        writeThread?.join()
+        synchronized(writeLock) {
+            outputBuffer.reset()
+            bufferedBytes = 0L
+            lastWrittenPts = 0L
+        }
     }
 
     private fun nextFilePath(): String {
