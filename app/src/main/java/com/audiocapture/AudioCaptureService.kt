@@ -64,6 +64,11 @@ class AudioCaptureService : Service() {
     private var audioDetectedTime = 0L  // 检测到声音的时间，用于确认阶段
     private val audioConfirmDurationMs = 500L  // 确认需要持续500ms有声音
 
+    // 缓冲写入相关
+    private val bufferFlushThreshold = 500 * 1024  // 500KB 触发写入
+    private var outputBuffer = mutableListOf<ByteArray>()
+    private var bufferSize = 0L
+
     private val handler = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -325,7 +330,7 @@ class AudioCaptureService : Service() {
     }
 
     // ----------------------------------------------------------------
-    // drain（非阻塞）
+    // drain（非阻塞）- 改为缓冲区写入
     // ----------------------------------------------------------------
     private fun drainEncoder(
         bufferInfo: MediaCodec.BufferInfo,
@@ -351,7 +356,16 @@ class AudioCaptureService : Service() {
                         (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) &&
                         bufferInfo.size > 0
                     ) {
-                        mediaMuxer?.writeSampleData(trackIndex, outputBuf, bufferInfo)
+                        // 复制数据到缓冲区
+                        val data = ByteArray(bufferInfo.size)
+                        outputBuf.get(data)
+                        outputBuffer.add(data)
+                        bufferSize += bufferInfo.size
+
+                        // 达到阈值时写入文件
+                        if (bufferSize >= bufferFlushThreshold) {
+                            flushBufferToFile(trackIndex)
+                        }
                     }
                     mediaCodec?.releaseOutputBuffer(outputIdx, false)
                 }
@@ -362,7 +376,28 @@ class AudioCaptureService : Service() {
     }
 
     // ----------------------------------------------------------------
-    // drain 直到 EOS
+    // 将缓冲区数据写入文件
+    // ----------------------------------------------------------------
+    private fun flushBufferToFile(trackIndex: Int) {
+        if (outputBuffer.isEmpty() || mediaMuxer == null) return
+
+        try {
+            for (data in outputBuffer) {
+                val info = MediaCodec.BufferInfo().apply {
+                    offset = 0
+                    size = data.size
+                    presentationTimeUs = 0
+                    flags = 0
+                }
+                mediaMuxer?.writeSampleData(trackIndex, ByteBuffer.wrap(data), info)
+            }
+        } catch (_: Exception) {}
+        outputBuffer.clear()
+        bufferSize = 0L
+    }
+
+    // ----------------------------------------------------------------
+    // drain 直到 EOS - 改为缓冲区写入
     // ----------------------------------------------------------------
     private fun drainUntilEOS(
         bufferInfo: MediaCodec.BufferInfo,
@@ -388,7 +423,11 @@ class AudioCaptureService : Service() {
                         (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) &&
                         bufferInfo.size > 0
                     ) {
-                        mediaMuxer?.writeSampleData(trackIndex, outputBuf, bufferInfo)
+                        // 复制数据到缓冲区
+                        val data = ByteArray(bufferInfo.size)
+                        outputBuf.get(data)
+                        outputBuffer.add(data)
+                        bufferSize += bufferInfo.size
                     }
                     mediaCodec?.releaseOutputBuffer(outputIdx, false)
                     if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
@@ -398,8 +437,14 @@ class AudioCaptureService : Service() {
                 else -> eosReached = true
             }
         }
+        // 刷新剩余缓冲区
+        if (trackIndex >= 0) {
+            flushBufferToFile(trackIndex)
+        }
         try { mediaMuxer?.stop(); mediaMuxer?.release() } catch (_: Exception) {}
         mediaMuxer = null
+        outputBuffer.clear()
+        bufferSize = 0L
     }
 
     private fun setupEncoder(filePath: String) {
@@ -416,6 +461,10 @@ class AudioCaptureService : Service() {
         mediaCodec?.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         mediaCodec?.start()
         mediaMuxer = MediaMuxer(filePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        
+        // 清空缓冲区
+        outputBuffer.clear()
+        bufferSize = 0L
     }
 
     private fun nextFilePath(): String {
