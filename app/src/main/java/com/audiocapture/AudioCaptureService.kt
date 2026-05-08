@@ -61,6 +61,8 @@ class AudioCaptureService : Service() {
     private var audioStartTime = 0L
     private var lastSplitTime = 0L  // 上次分割时间，用于冷却
     private val splitCooldownMs = 2000L  // 分割冷却期2秒
+    private var audioDetectedTime = 0L  // 检测到声音的时间，用于确认阶段
+    private val audioConfirmDurationMs = 500L  // 确认需要持续500ms有声音
 
     private val handler = Handler(Looper.getMainLooper())
 
@@ -170,18 +172,26 @@ class AudioCaptureService : Service() {
             // 逻辑：如果还没开始录音，静音时等待，有声音时开始
             if (!isRecordingStarted) {
                 if (amplitude >= SILENCE_AMPLITUDE_THRESHOLD) {
-                    // 开始录音
-                    isRecordingStarted = true
-                    audioStartTime = now
-                    currentFilePath = nextFilePath()
-                    setupEncoder(currentFilePath)
-                    presentationTimeUs = 0L
-                    muxerStarted = false
-                    audioTrackIndex = -1
+                    // 确认阶段：需要持续检测到声音才真正开始
+                    if (audioDetectedTime == 0L) {
+                        audioDetectedTime = now
+                    } else if (now - audioDetectedTime >= audioConfirmDurationMs) {
+                        // 持续检测到声音，进入正式录音
+                        isRecordingStarted = true
+                        audioStartTime = now
+                        currentFilePath = nextFilePath()
+                        setupEncoder(currentFilePath)
+                        presentationTimeUs = 0L
+                        muxerStarted = false
+                        audioTrackIndex = -1
+                        audioDetectedTime = 0L
+                    }
+                    // 否则继续等待确认
                 } else {
-                    // 静音等待，不做任何处理
-                    continue
+                    // 声音中断，重置确认时间
+                    audioDetectedTime = 0L
                 }
+                continue
             }
 
             // 已开始录音后的处理
@@ -197,22 +207,25 @@ class AudioCaptureService : Service() {
                     splitRequested = false
                     silenceSince = 0L
 
-                    // 只有录音时长超过3秒才保存文件
+                    // 只有录音时长超过3秒才保存文件并分割
                     if (now - audioStartTime > 3000) {
                         val savedPath = currentFilePath
                         flushAndCloseMuxer(bufferInfo, muxerStarted, audioTrackIndex, presentationTimeUs)
                         notifyFileSplit(savedPath)
                         fileIndex++
                         lastSplitTime = now
-                    }
 
-                    // 开新文件
-                    currentFilePath = nextFilePath()
-                    setupEncoder(currentFilePath)
-                    audioStartTime = now
-                    presentationTimeUs = 0L
-                    muxerStarted = false
-                    audioTrackIndex = -1
+                        // 开新文件
+                        currentFilePath = nextFilePath()
+                        setupEncoder(currentFilePath)
+                        audioStartTime = now
+                        presentationTimeUs = 0L
+                        muxerStarted = false
+                        audioTrackIndex = -1
+                    } else {
+                        // 录音时长太短，忽略分割请求，继续当前录音
+                        silenceSince = 0L
+                    }
                 }
 
                 // 送入编码器
