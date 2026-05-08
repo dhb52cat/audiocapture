@@ -392,24 +392,23 @@ class AudioCaptureService : Service() {
         try {
             var currentPts = pts
             var offset = 0
-            val chunkSize = 4096  // 4KB 块写入
+            val chunkSize = 4096
             
             while (offset < dataToWrite.size) {
                 val len = minOf(chunkSize, dataToWrite.size - offset)
                 val chunk = dataToWrite.copyOfRange(offset, offset + len)
-                    val info = MediaCodec.BufferInfo().apply {
-                        offset = 0
-                        size = len
-                        presentationTimeUs = currentPts
-                        flags = 0
-                    }
-                    mediaMuxer?.writeSampleData(trackIndex, ByteBuffer.wrap(chunk), info)
-                    currentPts += (len * 1_000_000L) / (SAMPLE_RATE * 2 * 2)
-                    offset += len
+                val info = MediaCodec.BufferInfo().apply {
+                    offset = 0
+                    size = len
+                    presentationTimeUs = currentPts
+                    flags = 0
                 }
-                lastWrittenPts = currentPts
-            } catch (_: Exception) {}
-        }
+                mediaMuxer?.writeSampleData(trackIndex, ByteBuffer.wrap(chunk), info)
+                currentPts += (len * 1_000_000L) / (SAMPLE_RATE * 2 * 2)
+                offset += len
+            }
+            lastWrittenPts = currentPts
+        } catch (_: Exception) {}
     }
 
     // ----------------------------------------------------------------
