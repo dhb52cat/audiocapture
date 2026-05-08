@@ -54,11 +54,13 @@ class AudioCaptureService : Service() {
     private var currentFilePath: String = ""
 
     private var silenceEnabled = true
-    private var silenceThresholdMs = 1500L
+    private var silenceThresholdMs = 500L
     private var silenceSince = 0L
-    private var minFileSizeBytes = 10 * 1024L  // 默认10KB
-    private var isRecordingStarted = false  // 是否真正开始录音（检测到声音）
-    private var audioStartTime = 0L  // 开始录音的时间
+    private var minFileSizeBytes = 1 * 1024 * 1024L
+    private var isRecordingStarted = false
+    private var audioStartTime = 0L
+    private var lastSplitTime = 0L  // 上次分割时间，用于冷却
+    private val splitCooldownMs = 2000L  // 分割冷却期2秒
 
     private val handler = Handler(Looper.getMainLooper())
 
@@ -73,9 +75,9 @@ class AudioCaptureService : Service() {
         when (intent?.action) {
             ACTION_START -> {
                 outputDir = intent.getStringExtra(EXTRA_OUTPUT_DIR) ?: filesDir.absolutePath
-                silenceThresholdMs = intent.getLongExtra(EXTRA_SILENCE_MS, 1500L)
+                silenceThresholdMs = intent.getLongExtra(EXTRA_SILENCE_MS, 500L)
                 silenceEnabled = intent.getBooleanExtra(EXTRA_SILENCE_ENABLED, true)
-                minFileSizeBytes = intent.getLongExtra(EXTRA_MIN_FILE_SIZE, 10 * 1024L)
+                minFileSizeBytes = intent.getLongExtra(EXTRA_MIN_FILE_SIZE, 1 * 1024 * 1024L)
                 val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
                 val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)
@@ -132,6 +134,7 @@ class AudioCaptureService : Service() {
             fileIndex = 1
             isRecordingStarted = false
             audioStartTime = 0L
+            lastSplitTime = 0L
 
             audioRecord?.startRecording()
             isRecording = true
@@ -183,26 +186,30 @@ class AudioCaptureService : Service() {
 
             // 已开始录音后的处理
             if (isRecordingStarted) {
-                // 判断是否需要分割（手动分割 或 静音分割）
+                val now = SystemClock.elapsedRealtime()
+                val timeSinceLastSplit = now - lastSplitTime
+
+                // 判断是否需要分割（手动分割 或 静音分割，且在冷却期后）
                 val shouldSplit = splitRequested ||
-                        (silenceEnabled && checkSilence(inputBuffer, bytesRead))
+                        (silenceEnabled && timeSinceLastSplit > splitCooldownMs && checkSilence(inputBuffer, bytesRead))
 
                 if (shouldSplit) {
                     splitRequested = false
                     silenceSince = 0L
 
-                    // 只有录音时长超过1秒才保存文件
-                    if (SystemClock.elapsedRealtime() - audioStartTime > 1000) {
+                    // 只有录音时长超过3秒才保存文件
+                    if (now - audioStartTime > 3000) {
                         val savedPath = currentFilePath
                         flushAndCloseMuxer(bufferInfo, muxerStarted, audioTrackIndex, presentationTimeUs)
                         notifyFileSplit(savedPath)
                         fileIndex++
+                        lastSplitTime = now
                     }
 
                     // 开新文件
                     currentFilePath = nextFilePath()
                     setupEncoder(currentFilePath)
-                    audioStartTime = SystemClock.elapsedRealtime()
+                    audioStartTime = now
                     presentationTimeUs = 0L
                     muxerStarted = false
                     audioTrackIndex = -1
@@ -403,20 +410,20 @@ class AudioCaptureService : Service() {
     }
 
     private fun notifyFileSplit(savedPath: String) {
-        val file = java.io.File(savedPath)
-        val fileSize = if (file.exists()) file.length() else 0L
+        // 延迟检查文件大小，确保文件完全写入
+        handler.postDelayed({
+            val file = java.io.File(savedPath)
+            val fileSize = if (file.exists()) file.length() else 0L
 
-        // 检查文件大小是否满足最小要求
-        if (minFileSizeBytes > 0 && fileSize < minFileSizeBytes) {
-            file.delete()
-            return
-        }
+            if (minFileSizeBytes > 0 && fileSize < minFileSizeBytes) {
+                file.delete()
+                return@postDelayed
+            }
 
-        handler.post {
             sendBroadcast(Intent(ACTION_FILE_SPLIT).apply {
                 putExtra(EXTRA_FILE_PATH, savedPath)
             })
-        }
+        }, 500)
     }
 
     private fun stopCapture() {
