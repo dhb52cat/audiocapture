@@ -69,6 +69,7 @@ class AudioCaptureService : Service() {
     private val bufferFlushThreshold = 500 * 1024  // 500KB 触发写入
     private data class BufferedData(val data: ByteArray, val pts: Long)
     private val outputBuffer = mutableListOf<BufferedData>()
+    private var bufferedBytes = 0L  // 缓冲区累计字节数
     private var lastWrittenPts = 0L  // 上次写入的时间戳
 
     private val handler = Handler(Looper.getMainLooper())
@@ -362,10 +363,10 @@ class AudioCaptureService : Service() {
                         val data = ByteArray(bufferInfo.size)
                         outputBuf.get(data)
                         outputBuffer.add(BufferedData(data, bufferInfo.presentationTimeUs))
-                        bufferSize += bufferInfo.size
+                        bufferedBytes += bufferInfo.size
 
                         // 达到阈值时写入文件
-                        if (bufferSize >= bufferFlushThreshold) {
+                        if (bufferedBytes >= bufferFlushThreshold) {
                             flushBufferToFile(trackIndex)
                         }
                     }
@@ -399,7 +400,7 @@ class AudioCaptureService : Service() {
             lastWrittenPts = currentPts
         } catch (_: Exception) {}
         outputBuffer.clear()
-        bufferSize = 0L
+        bufferedBytes = 0L
     }
 
     // ----------------------------------------------------------------
@@ -433,7 +434,7 @@ class AudioCaptureService : Service() {
                         val data = ByteArray(bufferInfo.size)
                         outputBuf.get(data)
                         outputBuffer.add(BufferedData(data, bufferInfo.presentationTimeUs))
-                        bufferSize += bufferInfo.size
+                        bufferedBytes += bufferInfo.size
                     }
                     mediaCodec?.releaseOutputBuffer(outputIdx, false)
                     if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
@@ -450,7 +451,7 @@ class AudioCaptureService : Service() {
         try { mediaMuxer?.stop(); mediaMuxer?.release() } catch (_: Exception) {}
         mediaMuxer = null
         outputBuffer.clear()
-        bufferSize = 0L
+        bufferedBytes = 0L
     }
 
     private fun setupEncoder(filePath: String) {
@@ -470,7 +471,7 @@ class AudioCaptureService : Service() {
         
         // 清空缓冲区
         outputBuffer.clear()
-        bufferSize = 0L
+        bufferedBytes = 0L
         lastWrittenPts = 0L
     }
 
