@@ -30,6 +30,11 @@ class MainActivity : AppCompatActivity() {
     private var silenceEnabled = true
     private var silenceThresholdMs = 1500L  // 默认1.5秒
 
+    // 最小文件大小设置（字节），默认 10KB
+    private var minFileSizeBytes = 10 * 1024L
+    private val minFileSizeOptions = arrayOf("不限制", "5 KB", "10 KB", "20 KB", "50 KB", "100 KB")
+    private val minFileSizeValues = longArrayOf(0, 5 * 1024L, 10 * 1024L, 20 * 1024L, 50 * 1024L, 100 * 1024L)
+
     // 已分割的文件列表
     private val splitFiles = mutableListOf<String>()
     private var hasRecordingStarted = false  // 标记是否真正开始过录音
@@ -155,6 +160,12 @@ class MainActivity : AppCompatActivity() {
             showSilenceConfigDialog()
         }
 
+        // 最小文件大小设置
+        binding.btnMinFileSize.setOnClickListener {
+            showMinFileSizeDialog()
+        }
+        updateMinFileSizeLabel()
+
         updateSilenceLabel()
         updateUI()
     }
@@ -188,6 +199,26 @@ class MainActivity : AppCompatActivity() {
         binding.btnSilenceConfig.text = "静音间隔：$label"
     }
 
+    private fun showMinFileSizeDialog() {
+        val currentIndex = minFileSizeValues.indexOfFirst { it == minFileSizeBytes }.coerceAtLeast(0)
+
+        AlertDialog.Builder(this)
+            .setTitle("最小文件大小")
+            .setSingleChoiceItems(minFileSizeOptions, currentIndex) { dialog, which ->
+                minFileSizeBytes = minFileSizeValues[which]
+                updateMinFileSizeLabel()
+                dialog.dismiss()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun updateMinFileSizeLabel() {
+        binding.btnMinFileSize.text = minFileSizeOptions[
+            minFileSizeValues.indexOfFirst { it == minFileSizeBytes }.coerceAtLeast(0)
+        ]
+    }
+
     private fun checkPermissionsAndStart() {
         val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -213,6 +244,7 @@ class MainActivity : AppCompatActivity() {
             putExtra(AudioCaptureService.EXTRA_OUTPUT_DIR, outputDir)
             putExtra(AudioCaptureService.EXTRA_SILENCE_MS, silenceThresholdMs)
             putExtra(AudioCaptureService.EXTRA_SILENCE_ENABLED, silenceEnabled)
+            putExtra(AudioCaptureService.EXTRA_MIN_FILE_SIZE, minFileSizeBytes)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(serviceIntent)

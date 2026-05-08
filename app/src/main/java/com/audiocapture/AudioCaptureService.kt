@@ -30,6 +30,7 @@ class AudioCaptureService : Service() {
         const val EXTRA_OUTPUT_DIR = "output_dir"
         const val EXTRA_SILENCE_MS = "silence_ms"
         const val EXTRA_SILENCE_ENABLED = "silence_enabled"
+        const val EXTRA_MIN_FILE_SIZE = "min_file_size"
 
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "audio_capture_channel"
@@ -55,6 +56,7 @@ class AudioCaptureService : Service() {
     private var silenceEnabled = true
     private var silenceThresholdMs = 1500L
     private var silenceSince = 0L
+    private var minFileSizeBytes = 10 * 1024L  // 默认10KB
     private var isRecordingStarted = false  // 是否真正开始录音（检测到声音）
     private var audioStartTime = 0L  // 开始录音的时间
 
@@ -73,6 +75,7 @@ class AudioCaptureService : Service() {
                 outputDir = intent.getStringExtra(EXTRA_OUTPUT_DIR) ?: filesDir.absolutePath
                 silenceThresholdMs = intent.getLongExtra(EXTRA_SILENCE_MS, 1500L)
                 silenceEnabled = intent.getBooleanExtra(EXTRA_SILENCE_ENABLED, true)
+                minFileSizeBytes = intent.getLongExtra(EXTRA_MIN_FILE_SIZE, 10 * 1024L)
                 val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
                 val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)
@@ -400,6 +403,15 @@ class AudioCaptureService : Service() {
     }
 
     private fun notifyFileSplit(savedPath: String) {
+        val file = java.io.File(savedPath)
+        val fileSize = if (file.exists()) file.length() else 0L
+
+        // 检查文件大小是否满足最小要求
+        if (minFileSizeBytes > 0 && fileSize < minFileSizeBytes) {
+            file.delete()
+            return
+        }
+
         handler.post {
             sendBroadcast(Intent(ACTION_FILE_SPLIT).apply {
                 putExtra(EXTRA_FILE_PATH, savedPath)
