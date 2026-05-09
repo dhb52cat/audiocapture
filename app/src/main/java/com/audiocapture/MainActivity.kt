@@ -13,8 +13,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.audiocapture.databinding.ActivityMainBinding
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.*
 
 class MainActivity : AppCompatActivity() {
 
@@ -85,6 +83,7 @@ class MainActivity : AppCompatActivity() {
                         binding.tvLastFile.text = "已分割：${File(path).name}"
                         binding.tvSplitCount.text = "已分割 ${splitFiles.size} 个文件"
                         showToast("✂️ 已保存：${File(path).name}")
+                        refreshRecordingList() // 分割后刷新列表
                     }
                 }
                 AudioCaptureService.ACTION_ERROR -> {
@@ -93,6 +92,10 @@ class MainActivity : AppCompatActivity() {
                     isRecording = false
                     updateUI()
                     stopTimer()
+                }
+                // 新增：监听自定义发送的更新列表广播（Service里我们写了 com.audiocapture.NEW_FILE）
+                "com.audiocapture.NEW_FILE" -> {
+                    refreshRecordingList()
                 }
             }
         }
@@ -103,8 +106,7 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE)
-                as MediaProjectionManager
+        mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
         setupUI()
         refreshRecordingList()
@@ -114,7 +116,9 @@ class MainActivity : AppCompatActivity() {
             addAction(AudioCaptureService.ACTION_RECORDING_STOPPED)
             addAction(AudioCaptureService.ACTION_FILE_SPLIT)
             addAction(AudioCaptureService.ACTION_ERROR)
+            addAction("com.audiocapture.NEW_FILE") // 添加新文件的监听
         }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(serviceReceiver, filter, RECEIVER_NOT_EXPORTED)
         } else {
@@ -137,9 +141,7 @@ class MainActivity : AppCompatActivity() {
         // 手动分割
         binding.btnSplit.setOnClickListener {
             if (isRecording) {
-                val serviceIntent = Intent(this, AudioCaptureService::class.java).apply {
-                    action = AudioCaptureService.ACTION_SPLIT
-                }
+                val serviceIntent = Intent(this, AudioCaptureService::class.java).apply { action = AudioCaptureService.ACTION_SPLIT }
                 startService(serviceIntent)
                 showToast("✂️ 手动分割中...")
             } else {
@@ -151,21 +153,16 @@ class MainActivity : AppCompatActivity() {
         binding.switchSilence.isChecked = silenceEnabled
         binding.switchSilence.setOnCheckedChangeListener { _, checked ->
             silenceEnabled = checked
-            binding.layoutSilenceConfig.visibility =
-                if (checked) android.view.View.VISIBLE else android.view.View.GONE
+            binding.layoutSilenceConfig.visibility = if (checked) android.view.View.VISIBLE else android.view.View.GONE
         }
 
         // 静音时长设置
-        binding.btnSilenceConfig.setOnClickListener {
-            showSilenceConfigDialog()
-        }
+        binding.btnSilenceConfig.setOnClickListener { showSilenceConfigDialog() }
 
         // 最小文件大小设置
-        binding.btnMinFileSize.setOnClickListener {
-            showMinFileSizeDialog()
-        }
-        updateMinFileSizeLabel()
+        binding.btnMinFileSize.setOnClickListener { showMinFileSizeDialog() }
 
+        updateMinFileSizeLabel()
         updateSilenceLabel()
         updateUI()
     }
@@ -201,7 +198,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun showMinFileSizeDialog() {
         val currentIndex = minFileSizeValues.indexOfFirst { it == minFileSizeBytes }.coerceAtLeast(0)
-
         AlertDialog.Builder(this)
             .setTitle("最小文件大小")
             .setSingleChoiceItems(minFileSizeOptions, currentIndex) { dialog, which ->
@@ -262,22 +258,18 @@ class MainActivity : AppCompatActivity() {
     private fun updateUI() {
         if (isRecording) {
             binding.btnRecord.text = "⏹ 停止录音"
-            binding.btnRecord.setBackgroundColor(getColor(R.color.stop_color))
             binding.btnSplit.isEnabled = true
             binding.btnSplit.alpha = 1f
             binding.tvStatus.text = "● 正在录制系统音频..."
-            binding.tvStatus.setTextColor(getColor(R.color.recording_color))
             binding.waveView.startAnimation()
             binding.layoutSettings.visibility = android.view.View.GONE
             binding.tvSplitCount.text = "已分割 0 个文件"
             binding.tvSplitCount.visibility = android.view.View.VISIBLE
         } else {
             binding.btnRecord.text = "● 开始录音"
-            binding.btnRecord.setBackgroundColor(getColor(R.color.start_color))
             binding.btnSplit.isEnabled = false
             binding.btnSplit.alpha = 0.4f
             binding.tvStatus.text = "准备就绪"
-            binding.tvStatus.setTextColor(getColor(R.color.ready_color))
             binding.waveView.stopAnimation()
             binding.tvTimer.text = "00:00"
             binding.layoutSettings.visibility = android.view.View.VISIBLE
@@ -303,15 +295,19 @@ class MainActivity : AppCompatActivity() {
         timerRunnable = null
     }
 
+    // --- 核心优化：过滤小于 100KB 的文件 ---
     private fun refreshRecordingList() {
         val dir = getOutputDir()
-        val files = dir.listFiles { f -> f.name.endsWith(".m4a") }
-            ?.sortedByDescending { it.lastModified() } ?: emptyList()
-        binding.tvRecordingCount.text = "共 ${files.size} 个录音文件"
+        // 添加过滤条件：仅统计和展示大于 100KB (102400 Bytes) 的正常文件
+        val files = dir.listFiles { f ->
+            f.name.endsWith(".m4a") && f.length() > 102400
+        }?.sortedByDescending { it.lastModified() } ?: emptyList()
+
+        binding.tvRecordingCount.text = "共 ${files.size} 个有效录音"
         if (files.isNotEmpty()) {
             binding.tvLastFile.text = "最新：${files.first().name}"
         } else {
-            binding.tvLastFile.text = "尚无录音"
+            binding.tvLastFile.text = "尚无有效录音"
         }
     }
 

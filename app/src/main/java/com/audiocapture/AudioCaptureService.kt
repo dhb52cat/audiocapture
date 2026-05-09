@@ -5,537 +5,313 @@ import android.content.Intent
 import android.media.*
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
-import android.os.*
+import android.os.Build
+import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
-import kotlin.math.abs
+import java.io.File
+import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * 前台服务：捕获系统音频，支持静音自动分割 + 手动分割
- */
 class AudioCaptureService : Service() {
 
     companion object {
-        const val ACTION_START = "com.audiocapture.START"
-        const val ACTION_STOP = "com.audiocapture.STOP"
-        const val ACTION_SPLIT = "com.audiocapture.SPLIT"
-        const val ACTION_RECORDING_STARTED = "com.audiocapture.STARTED"
-        const val ACTION_RECORDING_STOPPED = "com.audiocapture.STOPPED"
+        private const val TAG = "AudioCaptureService"
+        private const val CHANNEL_ID = "AudioCaptureChannel"
+
+        // --- 核心算法固定参数 ---
+        private const val SAMPLE_RATE = 44100
+        private const val BIT_RATE = 192000
+        private const val SILENCE_THRESHOLD = 180        // 振幅阈值过滤底噪
+        private const val MIN_RECORD_DURATION_MS = 2000L // 至少录制2秒才保留
+
+        // --- Action 和 Extra 常量 ---
+        const val ACTION_START = "ACTION_START"
+        const val ACTION_STOP = "ACTION_STOP"
+        const val ACTION_SPLIT = "ACTION_SPLIT"
+
+        const val ACTION_RECORDING_STARTED = "com.audiocapture.RECORDING_STARTED"
+        const val ACTION_RECORDING_STOPPED = "com.audiocapture.RECORDING_STOPPED"
         const val ACTION_FILE_SPLIT = "com.audiocapture.FILE_SPLIT"
         const val ACTION_ERROR = "com.audiocapture.ERROR"
 
-        const val EXTRA_RESULT_CODE = "result_code"
-        const val EXTRA_DATA = "data"
-        const val EXTRA_FILE_PATH = "file_path"
-        const val EXTRA_ERROR_MSG = "error_msg"
-        const val EXTRA_OUTPUT_DIR = "output_dir"
-        const val EXTRA_SILENCE_MS = "silence_ms"
-        const val EXTRA_SILENCE_ENABLED = "silence_enabled"
-        const val EXTRA_MIN_FILE_SIZE = "min_file_size"
-
-        private const val NOTIFICATION_ID = 1001
-        private const val CHANNEL_ID = "audio_capture_channel"
-        private const val SAMPLE_RATE = 44100
-        private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_STEREO
-        private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
-        private const val SILENCE_AMPLITUDE_THRESHOLD = 150
+        const val EXTRA_RESULT_CODE = "EXTRA_RESULT_CODE"
+        const val EXTRA_DATA = "EXTRA_DATA"
+        const val EXTRA_OUTPUT_DIR = "EXTRA_OUTPUT_DIR"
+        const val EXTRA_SILENCE_MS = "EXTRA_SILENCE_MS"
+        const val EXTRA_SILENCE_ENABLED = "EXTRA_SILENCE_ENABLED"
+        const val EXTRA_MIN_FILE_SIZE = "EXTRA_MIN_FILE_SIZE"
+        const val EXTRA_FILE_PATH = "EXTRA_FILE_PATH"
+        const val EXTRA_ERROR_MSG = "EXTRA_ERROR_MSG"
     }
 
-    private var mediaProjection: MediaProjection? = null
+    private var projection: MediaProjection? = null
     private var audioRecord: AudioRecord? = null
-    private var mediaCodec: MediaCodec? = null
-    private var mediaMuxer: MediaMuxer? = null
+    private var encoder: MediaCodec? = null
+    private var muxer: MediaMuxer? = null
 
+    // --- 线程与并发控制锁 ---
+    private val isRecording = AtomicBoolean(false)
+    private val isReleasing = AtomicBoolean(false)
     private var recordingThread: Thread? = null
-    @Volatile private var isRecording = false
-    @Volatile private var splitRequested = false
 
+    // --- 状态与配置变量 ---
+    private var currentFilePath: String? = null
+    private var lastVoiceTime = 0L
+    private var startTimeMs = 0L
+    private var isMuxerStarted = false
+
+    // 【核心修复：时间戳计数器】用于准确计算音频文件的 PTS
+    private var totalBytesReadForCurrentFile = 0L
+
+    // 接收来自 MainActivity 的设置
+    private var silenceHangtimeMs = 1500L
+    private var isSilenceEnabled = true
+    private var minFileSizeBytes = 100 * 1024L
     private var outputDir: String = ""
-    private var fileIndex = 1
-    private var currentFilePath: String = ""
-
-    private var silenceEnabled = true
-    private var silenceThresholdMs = 500L
-    private var silenceSince = 0L
-    private var minFileSizeBytes = 1 * 1024 * 1024L
-    private var isRecordingStarted = false
-    private var audioStartTime = 0L
-    private var lastSplitTime = 0L  // 上次分割时间，用于冷却
-    private val splitCooldownMs = 2000L  // 分割冷却期2秒
-    private var audioDetectedTime = 0L  // 检测到声音的时间，用于确认阶段
-    private val audioConfirmDurationMs = 500L  // 确认需要持续500ms有声音
-
-private var lastWrittenPts = 0L
-
-    private val handler = Handler(Looper.getMainLooper())
-
-    override fun onBind(intent: Intent?): IBinder? = null
-
-    override fun onCreate() {
-        super.onCreate()
-        createNotificationChannel()
-    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
-                outputDir = intent.getStringExtra(EXTRA_OUTPUT_DIR) ?: filesDir.absolutePath
-                silenceThresholdMs = intent.getLongExtra(EXTRA_SILENCE_MS, 500L)
-                silenceEnabled = intent.getBooleanExtra(EXTRA_SILENCE_ENABLED, true)
-                minFileSizeBytes = intent.getLongExtra(EXTRA_MIN_FILE_SIZE, 1 * 1024 * 1024L)
                 val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
-                val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getParcelableExtra(EXTRA_DATA)
-                }
-                if (data != null) {
-                    startForeground(NOTIFICATION_ID, buildNotification("正在录制系统音频..."))
-                    startCapture(resultCode, data)
+                val data = intent.getParcelableExtra<Intent>(EXTRA_DATA)
+
+                outputDir = intent.getStringExtra(EXTRA_OUTPUT_DIR) ?: getExternalFilesDir(null)?.absolutePath + "/Recordings"
+                silenceHangtimeMs = intent.getLongExtra(EXTRA_SILENCE_MS, 1500L)
+                isSilenceEnabled = intent.getBooleanExtra(EXTRA_SILENCE_ENABLED, true)
+                minFileSizeBytes = intent.getLongExtra(EXTRA_MIN_FILE_SIZE, 100 * 1024L)
+
+                if (resultCode == Activity.RESULT_OK && data != null) {
+                    startForeground(1, createNotification())
+                    val projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                    projection = projectionManager.getMediaProjection(resultCode, data)
+                    startCapture()
+                    sendBroadcast(Intent(ACTION_RECORDING_STARTED))
                 }
             }
-            ACTION_STOP -> stopCapture()
+            ACTION_STOP -> {
+                releaseResources()
+                stopSelf()
+            }
             ACTION_SPLIT -> {
-                if (isRecordingStarted) {
-                    splitRequested = true
+                if (isRecording.get()) {
+                    stopAndReleaseMuxer(isManualSplit = true)
                 }
             }
         }
         return START_NOT_STICKY
     }
 
-    private fun startCapture(resultCode: Int, data: Intent) {
-        val projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        mediaProjection = projectionManager.getMediaProjection(resultCode, data)
+    private fun startCapture() {
+        if (isRecording.get()) return
 
-        val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
-            .coerceAtLeast(8192)
+        isReleasing.set(false)
+        isRecording.set(true)
 
-        try {
-            val captureConfig = AudioPlaybackCaptureConfiguration.Builder(mediaProjection!!)
-                .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
-                .addMatchingUsage(AudioAttributes.USAGE_GAME)
-                .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
-                .build()
+        recordingThread = Thread {
+            try {
+                val config = AudioPlaybackCaptureConfiguration.Builder(projection!!)
+                    .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+                    .addMatchingUsage(AudioAttributes.USAGE_GAME)
+                    .build()
 
-            val audioFormat = AudioFormat.Builder()
-                .setSampleRate(SAMPLE_RATE)
-                .setChannelMask(CHANNEL_CONFIG)
-                .setEncoding(AUDIO_FORMAT)
-                .build()
+                val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT) * 2
+                audioRecord = AudioRecord.Builder()
+                    .setAudioFormat(AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(SAMPLE_RATE)
+                        .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                        .build())
+                    .setAudioPlaybackCaptureConfig(config)
+                    .setBufferSizeInBytes(bufferSize)
+                    .build()
 
-            audioRecord = AudioRecord.Builder()
-                .setAudioFormat(audioFormat)
-                .setBufferSizeInBytes(bufferSize * 2)
-                .setAudioPlaybackCaptureConfig(captureConfig)
-                .build()
+                audioRecord?.startRecording()
+                val buffer = ShortArray(bufferSize / 2)
 
-            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-                sendError("AudioRecord 初始化失败，请检查权限和Android版本")
-                return
+                while (isRecording.get()) {
+                    val readSize = audioRecord?.read(buffer, 0, buffer.size) ?: 0
+                    if (readSize > 0) {
+                        val amplitude = calculateMaxAmplitude(buffer, readSize)
+                        sendAmplitudeBroadcast(amplitude)
+
+                        val currentTime = System.currentTimeMillis()
+                        val hasVoice = !isSilenceEnabled || amplitude > SILENCE_THRESHOLD
+
+                        if (hasVoice) {
+                            lastVoiceTime = currentTime
+                            if (muxer == null) {
+                                prepareEncoderAndMuxer()
+                            }
+                            processAudioFrame(buffer, readSize)
+                        } else {
+                            if (muxer != null && (currentTime - lastVoiceTime > silenceHangtimeMs)) {
+                                stopAndReleaseMuxer(isManualSplit = false)
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Recording error: ${e.message}")
+                sendBroadcast(Intent(ACTION_ERROR).putExtra(EXTRA_ERROR_MSG, e.message))
+            } finally {
+                releaseResources()
             }
+        }.apply { name = "AudioRecordThread"; start() }
+    }
 
-            fileIndex = 1
-            isRecordingStarted = false
-            audioStartTime = 0L
-            lastSplitTime = 0L
+    private fun prepareEncoderAndMuxer() {
+        try {
+            val dir = File(outputDir)
+            if (!dir.exists()) dir.mkdirs()
 
-            audioRecord?.startRecording()
-            isRecording = true
-            sendBroadcast(Intent(ACTION_RECORDING_STARTED))
+            val fileName = "Record_${System.currentTimeMillis()}.m4a"
+            val file = File(dir, fileName)
+            currentFilePath = file.absolutePath
+            startTimeMs = System.currentTimeMillis()
 
-            recordingThread = Thread { encodeLoop(bufferSize) }
-            recordingThread?.start()
+            // 【核心修复：每次创建新文件时，严格将写入字节重置为 0】
+            totalBytesReadForCurrentFile = 0L
 
+            val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, SAMPLE_RATE, 1)
+            format.setInteger(MediaFormat.KEY_BIT_RATE, BIT_RATE)
+            format.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+            format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 1024 * 20)
+
+            encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+            encoder?.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            encoder?.start()
+
+            muxer = MediaMuxer(currentFilePath!!, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            isMuxerStarted = false
         } catch (e: Exception) {
-            sendError("启动录音失败：${e.message}")
+            sendBroadcast(Intent(ACTION_ERROR).putExtra(EXTRA_ERROR_MSG, "编码器初始化失败: ${e.message}"))
+            stopAndReleaseMuxer(false)
         }
     }
 
-    // ----------------------------------------------------------------
-    // 主编码循环
-    // ----------------------------------------------------------------
-    private fun encodeLoop(bufferSize: Int) {
-        val inputBuffer = ByteArray(bufferSize)
-        var muxerStarted = false
-        var audioTrackIndex = -1
+    private fun processAudioFrame(buffer: ShortArray, size: Int) {
+        val safeEncoder = encoder ?: return
+        val safeMuxer = muxer ?: return
+
+        // 1. 输入 PCM 数据
+        val inputIndex = safeEncoder.dequeueInputBuffer(10000)
+        if (inputIndex >= 0) {
+            val inputBuffer = safeEncoder.getInputBuffer(inputIndex)
+            if (inputBuffer != null) {
+                inputBuffer.clear()
+                // 维持之前的小端序修复，防爆音
+                inputBuffer.order(java.nio.ByteOrder.nativeOrder())
+                inputBuffer.asShortBuffer().put(buffer, 0, size)
+
+                // 【核心修复：按采样公式精确计算 PTS（微秒）】
+                // 1 个采样 (16-bit Mono) 占用 2 个字节。所以 totalBytesRead / 2 = 采样数
+                val ptsUs = (totalBytesReadForCurrentFile * 1_000_000L) / (SAMPLE_RATE * 2L)
+
+                safeEncoder.queueInputBuffer(inputIndex, 0, size * 2, ptsUs, 0)
+
+                // 累加本次写入的字节数（ShortArray 的 size 表示采样点个数，字节数需 * 2）
+                totalBytesReadForCurrentFile += (size * 2L)
+            }
+        }
+
+        // 2. 提取编码后的 AAC 数据
         val bufferInfo = MediaCodec.BufferInfo()
-        var presentationTimeUs = 0L
-        val bytesPerSecond = SAMPLE_RATE * 2 * 2
-
-        while (isRecording) {
-            val bytesRead = audioRecord?.read(inputBuffer, 0, bufferSize) ?: 0
-            if (bytesRead <= 0) {
-                try { Thread.sleep(10) } catch (_: Exception) {}
-                continue
+        var outputIndex = safeEncoder.dequeueOutputBuffer(bufferInfo, 10000)
+        while (outputIndex >= 0) {
+            val outputBuffer = safeEncoder.getOutputBuffer(outputIndex)
+            if (outputBuffer != null && bufferInfo.size > 0) {
+                if (!isMuxerStarted) {
+                    safeMuxer.addTrack(safeEncoder.outputFormat)
+                    safeMuxer.start()
+                    isMuxerStarted = true
+                }
+                safeMuxer.writeSampleData(0, outputBuffer, bufferInfo)
             }
+            safeEncoder.releaseOutputBuffer(outputIndex, false)
+            outputIndex = safeEncoder.dequeueOutputBuffer(bufferInfo, 0)
+        }
+    }
 
-            // 检测当前音量
-            val amplitude = calculateAmplitude(inputBuffer, bytesRead)
-            val now = SystemClock.elapsedRealtime()
+    private fun stopAndReleaseMuxer(isManualSplit: Boolean) {
+        synchronized(this) {
+            try {
+                encoder?.apply { stop(); release() }
+                muxer?.apply { if (isMuxerStarted) stop(); release() }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error closing muxer: ${e.message}")
+            } finally {
+                encoder = null
+                muxer = null
+                isMuxerStarted = false
+                checkAndCleanupFile(isManualSplit)
+            }
+        }
+    }
 
-            // 逻辑：如果还没开始录音，静音时等待，有声音时开始
-            if (!isRecordingStarted) {
-                if (amplitude >= SILENCE_AMPLITUDE_THRESHOLD) {
-                    // 确认阶段：需要持续检测到声音才真正开始
-                    if (audioDetectedTime == 0L) {
-                        audioDetectedTime = now
-                    } else if (now - audioDetectedTime >= audioConfirmDurationMs) {
-                        // 持续检测到声音，进入正式录音
-                        isRecordingStarted = true
-                        audioStartTime = now
-                        currentFilePath = nextFilePath()
-                        setupEncoder(currentFilePath)
-                        presentationTimeUs = 0L
-                        muxerStarted = false
-                        audioTrackIndex = -1
-                        audioDetectedTime = 0L
-                    }
-                    // 否则继续等待确认
+    private fun checkAndCleanupFile(isManualSplit: Boolean) {
+        currentFilePath?.let { path ->
+            val file = File(path)
+            val duration = System.currentTimeMillis() - startTimeMs
+            if (file.exists()) {
+                val isSizeTooSmall = minFileSizeBytes > 0 && file.length() < minFileSizeBytes
+                val isDurationTooShort = duration < MIN_RECORD_DURATION_MS
+
+                if (isSizeTooSmall || isDurationTooShort) {
+                    file.delete()
                 } else {
-                    // 声音中断，重置确认时间
-                    audioDetectedTime = 0L
-                }
-                continue
-            }
-
-            // 已开始录音后的处理
-            if (isRecordingStarted) {
-                val now = SystemClock.elapsedRealtime()
-                val timeSinceLastSplit = now - lastSplitTime
-
-                // 判断是否需要分割（手动分割 或 静音分割，且在冷却期后）
-                val shouldSplit = splitRequested ||
-                        (silenceEnabled && timeSinceLastSplit > splitCooldownMs && checkSilence(inputBuffer, bytesRead))
-
-                if (shouldSplit) {
-                    splitRequested = false
-                    silenceSince = 0L
-
-                    // 只有录音时长超过3秒才保存文件并分割
-                    if (now - audioStartTime > 3000) {
-                        val savedPath = currentFilePath
-                        flushAndCloseMuxer(bufferInfo, muxerStarted, audioTrackIndex, presentationTimeUs)
-                        notifyFileSplit(savedPath)
-                        fileIndex++
-                        lastSplitTime = now
-
-                        // 开新文件
-                        currentFilePath = nextFilePath()
-                        setupEncoder(currentFilePath)
-                        audioStartTime = now
-                        presentationTimeUs = 0L
-                        muxerStarted = false
-                        audioTrackIndex = -1
-                    } else {
-                        // 录音时长太短，忽略分割请求，继续当前录音
-                        silenceSince = 0L
-                    }
-                }
-
-                // 送入编码器
-                val inputIdx = mediaCodec?.dequeueInputBuffer(10_000) ?: -1
-                if (inputIdx >= 0) {
-                    val buf = mediaCodec?.getInputBuffer(inputIdx)
-                    buf?.clear()
-                    buf?.put(inputBuffer, 0, bytesRead)
-                    presentationTimeUs += (bytesRead.toLong() * 1_000_000L) / bytesPerSecond
-                    mediaCodec?.queueInputBuffer(inputIdx, 0, bytesRead, presentationTimeUs, 0)
-                }
-
-                // drain 输出
-                val result = drainEncoder(bufferInfo, muxerStarted, audioTrackIndex)
-                muxerStarted = result.first
-                audioTrackIndex = result.second
-
-                // 更新最终状态
-                muxerStartedForLastFile = muxerStarted
-                audioTrackIndexForLastFile = audioTrackIndex
-                finalPresentationTimeUs = presentationTimeUs
-            }
-        }
-
-        // EOS
-        if (isRecordingStarted && mediaCodec != null) {
-            val eosIdx = mediaCodec?.dequeueInputBuffer(10_000) ?: -1
-            if (eosIdx >= 0) {
-                mediaCodec?.queueInputBuffer(eosIdx, 0, 0, presentationTimeUs,
-                    MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-            }
-            drainUntilEOS(bufferInfo, muxerStarted, audioTrackIndex)
-        }
-        releaseResources()
-    }
-
-    // ----------------------------------------------------------------
-    // 计算振幅
-    // ----------------------------------------------------------------
-    private fun calculateAmplitude(buffer: ByteArray, bytesRead: Int): Long {
-        var sum = 0L
-        var count = 0
-        var i = 0
-        while (i + 1 < bytesRead) {
-            val sample = ((buffer[i + 1].toInt() shl 8) or (buffer[i].toInt() and 0xFF)).toShort()
-            sum += abs(sample.toInt())
-            count++
-            i += 2
-        }
-        return if (count > 0) sum / count else 0L
-    }
-
-    // ----------------------------------------------------------------
-    // 静音检测
-    // ----------------------------------------------------------------
-    private fun checkSilence(buffer: ByteArray, bytesRead: Int): Boolean {
-        var sum = 0L
-        var count = 0
-        var i = 0
-        while (i + 1 < bytesRead) {
-            val sample = ((buffer[i + 1].toInt() shl 8) or (buffer[i].toInt() and 0xFF)).toShort()
-            sum += abs(sample.toInt())
-            count++
-            i += 2
-        }
-        val amplitude = if (count > 0) sum / count else 0L
-        val now = SystemClock.elapsedRealtime()
-
-        return if (amplitude < SILENCE_AMPLITUDE_THRESHOLD) {
-            if (silenceSince == 0L) silenceSince = now
-            (now - silenceSince) >= silenceThresholdMs
-        } else {
-            silenceSince = 0L
-            false
-        }
-    }
-
-    // ----------------------------------------------------------------
-    // flush 当前文件并关闭
-    // ----------------------------------------------------------------
-    private fun flushAndCloseMuxer(
-        bufferInfo: MediaCodec.BufferInfo,
-        muxerStarted: Boolean,
-        audioTrackIndex: Int,
-        presentationTimeUs: Long
-    ) {
-        try {
-            val eosIdx = mediaCodec?.dequeueInputBuffer(5_000) ?: -1
-            if (eosIdx >= 0) {
-                mediaCodec?.queueInputBuffer(eosIdx, 0, 0, presentationTimeUs,
-                    MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-            }
-            drainUntilEOS(bufferInfo, muxerStarted, audioTrackIndex)
-        } catch (_: Exception) {}
-        try { mediaCodec?.stop(); mediaCodec?.release() } catch (_: Exception) {}
-        mediaCodec = null
-    }
-
-    // ----------------------------------------------------------------
-    // drain（非阻塞）- 改为缓冲区写入
-    // ----------------------------------------------------------------
-    private fun drainEncoder(
-        bufferInfo: MediaCodec.BufferInfo,
-        muxerStarted: Boolean,
-        audioTrackIndex: Int
-    ): Pair<Boolean, Int> {
-        var started = muxerStarted
-        var trackIndex = audioTrackIndex
-        var outputIdx = mediaCodec?.dequeueOutputBuffer(bufferInfo, 0) ?: return Pair(started, trackIndex)
-
-        while (outputIdx >= 0 || outputIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-            when {
-                outputIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                    if (!started) {
-                        trackIndex = mediaMuxer!!.addTrack(mediaCodec!!.outputFormat)
-                        mediaMuxer!!.start()
-                        started = true
-                    }
-                }
-                outputIdx >= 0 -> {
-                    val outputBuf = mediaCodec?.getOutputBuffer(outputIdx)
-                    if (outputBuf != null && started &&
-                        (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) &&
-                        bufferInfo.size > 0
-                    ) {
-                        mediaMuxer?.writeSampleData(trackIndex, outputBuf, bufferInfo)
-                    }
-                    mediaCodec?.releaseOutputBuffer(outputIdx, false)
+                    val intent = Intent(if (isManualSplit) ACTION_FILE_SPLIT else "com.audiocapture.NEW_FILE")
+                    intent.putExtra(EXTRA_FILE_PATH, file.absolutePath)
+                    sendBroadcast(intent)
                 }
             }
-            outputIdx = mediaCodec?.dequeueOutputBuffer(bufferInfo, 0) ?: break
         }
-        return Pair(started, trackIndex)
+        currentFilePath = null
     }
 
-    // ----------------------------------------------------------------
-    // drain 直到 EOS
-    // ----------------------------------------------------------------
-    private fun drainUntilEOS(
-        bufferInfo: MediaCodec.BufferInfo,
-        muxerStarted: Boolean,
-        audioTrackIndex: Int
-    ) {
-        var started = muxerStarted
-        var trackIndex = audioTrackIndex
-        var eosReached = false
-        while (!eosReached) {
-            val outputIdx = mediaCodec?.dequeueOutputBuffer(bufferInfo, 10_000) ?: break
-            when {
-                outputIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                    if (!started) {
-                        trackIndex = mediaMuxer!!.addTrack(mediaCodec!!.outputFormat)
-                        mediaMuxer!!.start()
-                        started = true
-                    }
-                }
-                outputIdx >= 0 -> {
-                    val outputBuf = mediaCodec?.getOutputBuffer(outputIdx)
-                    if (outputBuf != null && started &&
-                        (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) &&
-                        bufferInfo.size > 0
-                    ) {
-                        mediaMuxer?.writeSampleData(trackIndex, outputBuf, bufferInfo)
-                    }
-                    mediaCodec?.releaseOutputBuffer(outputIdx, false)
-                    if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                        eosReached = true
-                    }
-                }
-                else -> eosReached = true
-            }
+    private fun calculateMaxAmplitude(buffer: ShortArray, size: Int): Int {
+        var max = 0
+        for (i in 0 until size) {
+            val abs = Math.abs(buffer[i].toInt())
+            if (abs > max) max = abs
         }
-        try { mediaMuxer?.stop(); mediaMuxer?.release() } catch (_: Exception) {}
-        mediaMuxer = null
+        return max
     }
 
-    private fun setupEncoder(filePath: String) {
-        try { mediaCodec?.stop(); mediaCodec?.release() } catch (_: Exception) {}
-        try { mediaMuxer?.stop(); mediaMuxer?.release() } catch (_: Exception) {}
-        
-        val mime = MediaFormat.MIMETYPE_AUDIO_AAC
-        val format = MediaFormat.createAudioFormat(mime, SAMPLE_RATE, 2).apply {
-            setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
-            setInteger(MediaFormat.KEY_BIT_RATE, 192_000)
-            setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16384)
-        }
-        mediaCodec = MediaCodec.createEncoderByType(mime)
-        mediaCodec?.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        mediaCodec?.start()
-        mediaMuxer = MediaMuxer(filePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+    private fun sendAmplitudeBroadcast(amplitude: Int) {
+        sendBroadcast(Intent("com.audiocapture.AMPLITUDE").apply { putExtra("amplitude", amplitude) })
     }
 
-    private fun nextFilePath(): String {
-        val dir = java.io.File(outputDir)
-        if (!dir.exists()) dir.mkdirs()
-        val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault())
-            .format(java.util.Date())
-        val nanoTime = System.nanoTime() % 1000000
-        return java.io.File(dir, "录音${fileIndex}_${stamp}_${nanoTime}.m4a").absolutePath
-    }
-
-    private fun notifyFileSplit(savedPath: String) {
-        // 延迟检查文件大小，确保文件完全写入
-        // 延迟足够长的时间确保 MediaMuxer 完全写入数据
-        handler.postDelayed({
-            val file = java.io.File(savedPath)
-            val fileSize = if (file.exists()) file.length() else 0L
-
-            // 检查文件大小是否满足最小要求
-            if (minFileSizeBytes > 0 && fileSize < minFileSizeBytes) {
-                file.delete()
-                return@postDelayed
-            }
-
-            sendBroadcast(Intent(ACTION_FILE_SPLIT).apply {
-                putExtra(EXTRA_FILE_PATH, savedPath)
-            })
-        }, 2000)
-    }
-
-    private fun stopCapture() {
-        isRecording = false
-        recordingThread?.join(4000)
-        recordingThread = null
-    }
-
-    private var muxerStartedForLastFile = false
-    private var audioTrackIndexForLastFile = -1
-    private var finalPresentationTimeUs = 0L
-
-    private fun releaseResources() {
-        try { audioRecord?.stop(); audioRecord?.release() } catch (_: Exception) {}
-        audioRecord = null
-        try { mediaProjection?.stop() } catch (_: Exception) {}
-        mediaProjection = null
-
-        // 如果正在录音且有有效数据，保存最后文件
-        if (isRecordingStarted && currentFilePath.isNotEmpty() && mediaCodec != null) {
-            val recordingDuration = SystemClock.elapsedRealtime() - audioStartTime
-            if (recordingDuration > 3000) {
-                // 发送 EOS 并 drain 所有剩余数据
-                val eosIdx = mediaCodec?.dequeueInputBuffer(10_000) ?: -1
-                if (eosIdx >= 0) {
-                    mediaCodec?.queueInputBuffer(eosIdx, 0, 0, finalPresentationTimeUs,
-                        MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                }
-                val bufferInfo = MediaCodec.BufferInfo()
-                drainUntilEOS(bufferInfo, muxerStartedForLastFile, audioTrackIndexForLastFile)
-                notifyFileSplit(currentFilePath)
-            } else {
-                // 录音时间太短，删除空文件
-                java.io.File(currentFilePath).delete()
-            }
-        }
-
-        isRecordingStarted = false
-
-        handler.post {
-            sendBroadcast(Intent(ACTION_RECORDING_STOPPED).apply {
-                putExtra(EXTRA_FILE_PATH, currentFilePath)
-            })
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-        }
-    }
-
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(CHANNEL_ID, "音频录制",
-                NotificationManager.IMPORTANCE_LOW).apply {
-                description = "系统内录服务通知"
-                setSound(null, null)
-            }
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-        }
-    }
-
-    private fun buildNotification(content: String): Notification {
-        val stopIntent = PendingIntent.getService(this, 0,
-            Intent(this, AudioCaptureService::class.java).apply { action = ACTION_STOP },
-            PendingIntent.FLAG_IMMUTABLE)
-        val splitIntent = PendingIntent.getService(this, 1,
-            Intent(this, AudioCaptureService::class.java).apply { action = ACTION_SPLIT },
-            PendingIntent.FLAG_IMMUTABLE)
+    private fun createNotification(): Notification {
+        val channel = NotificationChannel(CHANNEL_ID, "录音服务", NotificationManager.IMPORTANCE_LOW)
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("🎵 系统音频录制")
-            .setContentText(content)
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .addAction(android.R.drawable.ic_media_next, "✂️ 手动分割", splitIntent)
-            .addAction(android.R.drawable.ic_media_pause, "⏹ 停止", stopIntent)
-            .setOngoing(true)
-            .setSilent(true)
+            .setContentTitle("系统音频录制中")
+            .setContentText("正在自动检测声音并录制...")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
             .build()
     }
 
-    private fun sendError(msg: String) {
-        handler.post {
-            sendBroadcast(Intent(ACTION_ERROR).apply { putExtra(EXTRA_ERROR_MSG, msg) })
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-        }
+    private fun releaseResources() {
+        if (isReleasing.getAndSet(true)) return
+        isRecording.set(false)
+
+        try {
+            audioRecord?.stop()
+            audioRecord?.release()
+        } catch (e: Exception) {} finally { audioRecord = null }
+
+        stopAndReleaseMuxer(false)
+
+        try { projection?.stop() } catch (e: Exception) {} finally { projection = null }
+
+        sendBroadcast(Intent(ACTION_RECORDING_STOPPED).putExtra(EXTRA_FILE_PATH, currentFilePath))
     }
 
     override fun onDestroy() {
-        isRecording = false
+        releaseResources()
         super.onDestroy()
     }
+
+    override fun onBind(intent: Intent?): IBinder? = null
 }

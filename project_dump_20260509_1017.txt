@@ -1,0 +1,1741 @@
+================================================================================
+  项目文件汇总 (已过滤 .gitignore)
+  生成时间: 2026-05-09 10:17:00
+================================================================================
+
+【文件结构】
+
+├── README.md
+├── build.gradle
+├── gradle.properties
+├── settings.gradle
+└── app/
+    ├── build.gradle
+    ├── gradle.properties
+    └── src/
+        └── main/
+            ├── AndroidManifest.xml
+            └── java/
+                └── com/
+                    └── audiocapture/
+                        ├── AudioCaptureService.kt
+                        ├── MainActivity.kt
+                        ├── WaveformView.kt
+            └── res/
+                └── layout/
+                    ├── activity_main.xml
+                └── mipmap-hdpi/
+                    ├── ic_launcher.xml
+                └── values/
+                    ├── colors.xml
+                    ├── strings.xml
+                    ├── themes.xml
+└── gradle/
+    └── wrapper/
+        ├── gradle-wrapper.properties
+
+================================================================================
+【文件内容】
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+[001] README.md
+────────────────────────────────────────────────────────────────────────────────
+```markdown
+# 系统音频录制 App (AudioCapture)
+
+Android 内录应用 — 录制手机播放的任何声音（音乐、视频、游戏等）
+
+---
+
+## 功能特性
+
+- 🎵 **录制系统内部音频**：使用 Android 10+ 的 `AudioPlaybackCapture` API
+- 🎙️ **高品质编码**：AAC 192kbps，输出 M4A 格式
+- ⏱️ **实时计时器**：显示录制时长
+- 🌊 **波形动画**：录制中显示动态波形
+- 📁 **文件管理**：自动保存，显示录音列表
+- 🔔 **前台通知**：可从通知栏停止录制
+
+---
+
+## 系统要求
+
+| 项目 | 要求 |
+|------|------|
+| 最低 Android 版本 | **Android 10 (API 29)** |
+| 权限 | `RECORD_AUDIO`, `FOREGROUND_SERVICE` |
+| 特殊授权 | MediaProjection（每次录制时弹窗确认）|
+
+---
+
+## 快速开始
+
+### 1. 用 Android Studio 打开项目
+
+```
+File → Open → 选择 AudioCapture 文件夹
+```
+
+### 2. Sync Gradle
+
+点击 **Sync Now** 等待依赖下载
+
+### 3. 连接设备或启动模拟器
+
+**注意**：模拟器系统版本必须是 Android 10+
+
+### 4. 运行
+
+点击 ▶ Run，安装到手机
+
+---
+
+## 使用方法
+
+1. 打开 App
+2. 在其他 App 中开始播放音乐（如 QQ音乐、本地播放器）
+3. 回到 **系统录音** App，点击「● 开始录音」
+4. 弹出屏幕录制授权弹窗 → 点击「立即开始」
+5. 录音开始，波形动画显示
+6. 点击「⏹ 停止录音」或从通知栏停止
+7. 录音自动保存为 M4A 文件
+
+---
+
+## 文件保存位置
+
+```
+/Android/data/com.audiocapture/files/Recordings/录音_20241201_143022.m4a
+```
+
+可通过文件管理器或 ADB 访问：
+```bash
+adb pull /sdcard/Android/data/com.audiocapture/files/Recordings/
+```
+
+---
+
+## 重要限制
+
+| 情况 | 结果 |
+|------|------|
+| QQ音乐、网易云、本地播放器 | ✅ 通常可以录制 |
+| Spotify、YouTube Music | ❌ 这些App设置了 `ALLOW_CAPTURE_BY_NONE`，会被拒绝 |
+| 系统提示音、来电铃声 | ❌ 默认不可捕获 |
+| 游戏音效 | ✅ 通常可以录制 |
+
+> **原理说明**：Android 系统允许每个 App 声明自己是否允许被录制。
+> 大部分音乐流媒体 App 出于版权保护会禁止录制。
+> 本地播放器和部分国产应用通常没有这个限制。
+
+---
+
+## 项目结构
+
+```
+app/src/main/
+├── java/com/audiocapture/
+│   ├── MainActivity.kt          # 主界面、权限管理、UI交互
+│   ├── AudioCaptureService.kt   # 核心录音服务（前台Service）
+│   └── WaveformView.kt          # 自定义波形动画View
+├── res/
+│   ├── layout/activity_main.xml # 界面布局
+│   └── values/                  # 颜色、字符串、主题
+└── AndroidManifest.xml
+```
+
+---
+
+## 核心技术
+
+```kotlin
+// Android 10+ 专属 API：捕获系统音频播放
+val captureConfig = AudioPlaybackCaptureConfiguration.Builder(mediaProjection)
+    .addMatchingUsage(AudioAttributes.USAGE_MEDIA)  // 媒体音频
+    .addMatchingUsage(AudioAttributes.USAGE_GAME)   // 游戏音效
+    .build()
+
+val audioRecord = AudioRecord.Builder()
+    .setAudioPlaybackCaptureConfig(captureConfig)   // 关键：内录配置
+    .setAudioFormat(audioFormat)
+    .build()
+```
+
+编码链：**PCM 原始数据 → MediaCodec AAC编码 → MediaMuxer 封装 → M4A文件**
+
+---
+
+## 常见问题
+
+**Q: 弹窗说"无法录制"？**
+A: 你播放的应用（如Spotify）主动禁止了系统录制，换用本地播放器试试
+
+**Q: Android 9 或更低版本能用吗？**
+A: 不能，`AudioPlaybackCapture` API 是 Android 10 新增的
+
+**Q: 录音没有声音？**
+A: 确保录音时手机音量不为0，且被录制的App正在播放音频
+
+```
+
+────────────────────────────────────────────────────────────────────────────────
+[002] build.gradle
+────────────────────────────────────────────────────────────────────────────────
+```
+plugins {
+    id 'com.android.application' version '8.2.0' apply false
+    id 'org.jetbrains.kotlin.android' version '1.9.0' apply false
+}
+
+```
+
+────────────────────────────────────────────────────────────────────────────────
+[003] gradle.properties
+────────────────────────────────────────────────────────────────────────────────
+```
+android.useAndroidX=true
+android.enableJetifier=true
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+
+```
+
+────────────────────────────────────────────────────────────────────────────────
+[004] settings.gradle
+────────────────────────────────────────────────────────────────────────────────
+```
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = "AudioCapture"
+include ':app'
+
+```
+
+────────────────────────────────────────────────────────────────────────────────
+[005] app/build.gradle
+────────────────────────────────────────────────────────────────────────────────
+```
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    compileSdk 34
+    namespace "com.audiocapture"
+
+    defaultConfig {
+        applicationId "com.audiocapture"
+        minSdk 29          // Android 10 最低要求（AudioPlaybackCapture API）
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildFeatures {
+        viewBinding true
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+}
+
+dependencies {
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.0"
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'androidx.lifecycle:lifecycle-service:2.7.0'
+}
+
+```
+
+────────────────────────────────────────────────────────────────────────────────
+[006] app/gradle.properties
+────────────────────────────────────────────────────────────────────────────────
+```
+android.useAndroidX=true
+android.enableJetifier=true
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+```
+
+────────────────────────────────────────────────────────────────────────────────
+[007] app/src/main/AndroidManifest.xml
+────────────────────────────────────────────────────────────────────────────────
+```
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 权限声明 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AudioCapture">
+
+        <!-- 主界面 -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 前台录音服务 -->
+        <service
+            android:name=".AudioCaptureService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+    </application>
+
+</manifest>
+
+```
+
+────────────────────────────────────────────────────────────────────────────────
+[008] app/src/main/java/com/audiocapture/AudioCaptureService.kt
+────────────────────────────────────────────────────────────────────────────────
+```kotlin
+package com.audiocapture
+
+import android.app.*
+import android.content.Intent
+import android.media.*
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
+import android.os.*
+import androidx.core.app.NotificationCompat
+import kotlin.math.abs
+
+/**
+ * 前台服务：捕获系统音频，支持静音自动分割 + 手动分割
+ */
+class AudioCaptureService : Service() {
+
+    companion object {
+        const val ACTION_START = "com.audiocapture.START"
+        const val ACTION_STOP = "com.audiocapture.STOP"
+        const val ACTION_SPLIT = "com.audiocapture.SPLIT"
+        const val ACTION_RECORDING_STARTED = "com.audiocapture.STARTED"
+        const val ACTION_RECORDING_STOPPED = "com.audiocapture.STOPPED"
+        const val ACTION_FILE_SPLIT = "com.audiocapture.FILE_SPLIT"
+        const val ACTION_ERROR = "com.audiocapture.ERROR"
+
+        const val EXTRA_RESULT_CODE = "result_code"
+        const val EXTRA_DATA = "data"
+        const val EXTRA_FILE_PATH = "file_path"
+        const val EXTRA_ERROR_MSG = "error_msg"
+        const val EXTRA_OUTPUT_DIR = "output_dir"
+        const val EXTRA_SILENCE_MS = "silence_ms"
+        const val EXTRA_SILENCE_ENABLED = "silence_enabled"
+        const val EXTRA_MIN_FILE_SIZE = "min_file_size"
+
+        private const val NOTIFICATION_ID = 1001
+        private const val CHANNEL_ID = "audio_capture_channel"
+        private const val SAMPLE_RATE = 44100
+        private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_STEREO
+        private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
+        private const val SILENCE_AMPLITUDE_THRESHOLD = 150
+    }
+
+    private var mediaProjection: MediaProjection? = null
+    private var audioRecord: AudioRecord? = null
+    private var mediaCodec: MediaCodec? = null
+    private var mediaMuxer: MediaMuxer? = null
+
+    private var recordingThread: Thread? = null
+    @Volatile private var isRecording = false
+    @Volatile private var splitRequested = false
+
+    private var outputDir: String = ""
+    private var fileIndex = 1
+    private var currentFilePath: String = ""
+
+    private var silenceEnabled = true
+    private var silenceThresholdMs = 500L
+    private var silenceSince = 0L
+    private var minFileSizeBytes = 1 * 1024 * 1024L
+    private var isRecordingStarted = false
+    private var audioStartTime = 0L
+    private var lastSplitTime = 0L  // 上次分割时间，用于冷却
+    private val splitCooldownMs = 2000L  // 分割冷却期2秒
+    private var audioDetectedTime = 0L  // 检测到声音的时间，用于确认阶段
+    private val audioConfirmDurationMs = 500L  // 确认需要持续500ms有声音
+
+private var lastWrittenPts = 0L
+
+    private val handler = Handler(Looper.getMainLooper())
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_START -> {
+                outputDir = intent.getStringExtra(EXTRA_OUTPUT_DIR) ?: filesDir.absolutePath
+                silenceThresholdMs = intent.getLongExtra(EXTRA_SILENCE_MS, 500L)
+                silenceEnabled = intent.getBooleanExtra(EXTRA_SILENCE_ENABLED, true)
+                minFileSizeBytes = intent.getLongExtra(EXTRA_MIN_FILE_SIZE, 1 * 1024 * 1024L)
+                val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
+                val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(EXTRA_DATA)
+                }
+                if (data != null) {
+                    startForeground(NOTIFICATION_ID, buildNotification("正在录制系统音频..."))
+                    startCapture(resultCode, data)
+                }
+            }
+            ACTION_STOP -> stopCapture()
+            ACTION_SPLIT -> {
+                if (isRecordingStarted) {
+                    splitRequested = true
+                }
+            }
+        }
+        return START_NOT_STICKY
+    }
+
+    private fun startCapture(resultCode: Int, data: Intent) {
+        val projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        mediaProjection = projectionManager.getMediaProjection(resultCode, data)
+
+        val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
+            .coerceAtLeast(8192)
+
+        try {
+            val captureConfig = AudioPlaybackCaptureConfiguration.Builder(mediaProjection!!)
+                .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+                .addMatchingUsage(AudioAttributes.USAGE_GAME)
+                .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+                .build()
+
+            val audioFormat = AudioFormat.Builder()
+                .setSampleRate(SAMPLE_RATE)
+                .setChannelMask(CHANNEL_CONFIG)
+                .setEncoding(AUDIO_FORMAT)
+                .build()
+
+            audioRecord = AudioRecord.Builder()
+                .setAudioFormat(audioFormat)
+                .setBufferSizeInBytes(bufferSize * 2)
+                .setAudioPlaybackCaptureConfig(captureConfig)
+                .build()
+
+            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                sendError("AudioRecord 初始化失败，请检查权限和Android版本")
+                return
+            }
+
+            fileIndex = 1
+            isRecordingStarted = false
+            audioStartTime = 0L
+            lastSplitTime = 0L
+
+            audioRecord?.startRecording()
+            isRecording = true
+            sendBroadcast(Intent(ACTION_RECORDING_STARTED))
+
+            recordingThread = Thread { encodeLoop(bufferSize) }
+            recordingThread?.start()
+
+        } catch (e: Exception) {
+            sendError("启动录音失败：${e.message}")
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // 主编码循环
+    // ----------------------------------------------------------------
+    private fun encodeLoop(bufferSize: Int) {
+        val inputBuffer = ByteArray(bufferSize)
+        var muxerStarted = false
+        var audioTrackIndex = -1
+        val bufferInfo = MediaCodec.BufferInfo()
+        var presentationTimeUs = 0L
+        val bytesPerSecond = SAMPLE_RATE * 2 * 2
+
+        while (isRecording) {
+            val bytesRead = audioRecord?.read(inputBuffer, 0, bufferSize) ?: 0
+            if (bytesRead <= 0) {
+                try { Thread.sleep(10) } catch (_: Exception) {}
+                continue
+            }
+
+            // 检测当前音量
+            val amplitude = calculateAmplitude(inputBuffer, bytesRead)
+            val now = SystemClock.elapsedRealtime()
+
+            // 逻辑：如果还没开始录音，静音时等待，有声音时开始
+            if (!isRecordingStarted) {
+                if (amplitude >= SILENCE_AMPLITUDE_THRESHOLD) {
+                    // 确认阶段：需要持续检测到声音才真正开始
+                    if (audioDetectedTime == 0L) {
+                        audioDetectedTime = now
+                    } else if (now - audioDetectedTime >= audioConfirmDurationMs) {
+                        // 持续检测到声音，进入正式录音
+                        isRecordingStarted = true
+                        audioStartTime = now
+                        currentFilePath = nextFilePath()
+                        setupEncoder(currentFilePath)
+                        presentationTimeUs = 0L
+                        muxerStarted = false
+                        audioTrackIndex = -1
+                        audioDetectedTime = 0L
+                    }
+                    // 否则继续等待确认
+                } else {
+                    // 声音中断，重置确认时间
+                    audioDetectedTime = 0L
+                }
+                continue
+            }
+
+            // 已开始录音后的处理
+            if (isRecordingStarted) {
+                val now = SystemClock.elapsedRealtime()
+                val timeSinceLastSplit = now - lastSplitTime
+
+                // 判断是否需要分割（手动分割 或 静音分割，且在冷却期后）
+                val shouldSplit = splitRequested ||
+                        (silenceEnabled && timeSinceLastSplit > splitCooldownMs && checkSilence(inputBuffer, bytesRead))
+
+                if (shouldSplit) {
+                    splitRequested = false
+                    silenceSince = 0L
+
+                    // 只有录音时长超过3秒才保存文件并分割
+                    if (now - audioStartTime > 3000) {
+                        val savedPath = currentFilePath
+                        flushAndCloseMuxer(bufferInfo, muxerStarted, audioTrackIndex, presentationTimeUs)
+                        notifyFileSplit(savedPath)
+                        fileIndex++
+                        lastSplitTime = now
+
+                        // 开新文件
+                        currentFilePath = nextFilePath()
+                        setupEncoder(currentFilePath)
+                        audioStartTime = now
+                        presentationTimeUs = 0L
+                        muxerStarted = false
+                        audioTrackIndex = -1
+                    } else {
+                        // 录音时长太短，忽略分割请求，继续当前录音
+                        silenceSince = 0L
+                    }
+                }
+
+                // 送入编码器
+                val inputIdx = mediaCodec?.dequeueInputBuffer(10_000) ?: -1
+                if (inputIdx >= 0) {
+                    val buf = mediaCodec?.getInputBuffer(inputIdx)
+                    buf?.clear()
+                    buf?.put(inputBuffer, 0, bytesRead)
+                    presentationTimeUs += (bytesRead.toLong() * 1_000_000L) / bytesPerSecond
+                    mediaCodec?.queueInputBuffer(inputIdx, 0, bytesRead, presentationTimeUs, 0)
+                }
+
+                // drain 输出
+                val result = drainEncoder(bufferInfo, muxerStarted, audioTrackIndex)
+                muxerStarted = result.first
+                audioTrackIndex = result.second
+
+                // 更新最终状态
+                muxerStartedForLastFile = muxerStarted
+                audioTrackIndexForLastFile = audioTrackIndex
+                finalPresentationTimeUs = presentationTimeUs
+            }
+        }
+
+        // EOS
+        if (isRecordingStarted && mediaCodec != null) {
+            val eosIdx = mediaCodec?.dequeueInputBuffer(10_000) ?: -1
+            if (eosIdx >= 0) {
+                mediaCodec?.queueInputBuffer(eosIdx, 0, 0, presentationTimeUs,
+                    MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+            }
+            drainUntilEOS(bufferInfo, muxerStarted, audioTrackIndex)
+        }
+        releaseResources()
+    }
+
+    // ----------------------------------------------------------------
+    // 计算振幅
+    // ----------------------------------------------------------------
+    private fun calculateAmplitude(buffer: ByteArray, bytesRead: Int): Long {
+        var sum = 0L
+        var count = 0
+        var i = 0
+        while (i + 1 < bytesRead) {
+            val sample = ((buffer[i + 1].toInt() shl 8) or (buffer[i].toInt() and 0xFF)).toShort()
+            sum += abs(sample.toInt())
+            count++
+            i += 2
+        }
+        return if (count > 0) sum / count else 0L
+    }
+
+    // ----------------------------------------------------------------
+    // 静音检测
+    // ----------------------------------------------------------------
+    private fun checkSilence(buffer: ByteArray, bytesRead: Int): Boolean {
+        var sum = 0L
+        var count = 0
+        var i = 0
+        while (i + 1 < bytesRead) {
+            val sample = ((buffer[i + 1].toInt() shl 8) or (buffer[i].toInt() and 0xFF)).toShort()
+            sum += abs(sample.toInt())
+            count++
+            i += 2
+        }
+        val amplitude = if (count > 0) sum / count else 0L
+        val now = SystemClock.elapsedRealtime()
+
+        return if (amplitude < SILENCE_AMPLITUDE_THRESHOLD) {
+            if (silenceSince == 0L) silenceSince = now
+            (now - silenceSince) >= silenceThresholdMs
+        } else {
+            silenceSince = 0L
+            false
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // flush 当前文件并关闭
+    // ----------------------------------------------------------------
+    private fun flushAndCloseMuxer(
+        bufferInfo: MediaCodec.BufferInfo,
+        muxerStarted: Boolean,
+        audioTrackIndex: Int,
+        presentationTimeUs: Long
+    ) {
+        try {
+            val eosIdx = mediaCodec?.dequeueInputBuffer(5_000) ?: -1
+            if (eosIdx >= 0) {
+                mediaCodec?.queueInputBuffer(eosIdx, 0, 0, presentationTimeUs,
+                    MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+            }
+            drainUntilEOS(bufferInfo, muxerStarted, audioTrackIndex)
+        } catch (_: Exception) {}
+        try { mediaCodec?.stop(); mediaCodec?.release() } catch (_: Exception) {}
+        mediaCodec = null
+    }
+
+    // ----------------------------------------------------------------
+    // drain（非阻塞）- 改为缓冲区写入
+    // ----------------------------------------------------------------
+    private fun drainEncoder(
+        bufferInfo: MediaCodec.BufferInfo,
+        muxerStarted: Boolean,
+        audioTrackIndex: Int
+    ): Pair<Boolean, Int> {
+        var started = muxerStarted
+        var trackIndex = audioTrackIndex
+        var outputIdx = mediaCodec?.dequeueOutputBuffer(bufferInfo, 0) ?: return Pair(started, trackIndex)
+
+        while (outputIdx >= 0 || outputIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+            when {
+                outputIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    if (!started) {
+                        trackIndex = mediaMuxer!!.addTrack(mediaCodec!!.outputFormat)
+                        mediaMuxer!!.start()
+                        started = true
+                    }
+                }
+                outputIdx >= 0 -> {
+                    val outputBuf = mediaCodec?.getOutputBuffer(outputIdx)
+                    if (outputBuf != null && started &&
+                        (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) &&
+                        bufferInfo.size > 0
+                    ) {
+                        mediaMuxer?.writeSampleData(trackIndex, outputBuf, bufferInfo)
+                    }
+                    mediaCodec?.releaseOutputBuffer(outputIdx, false)
+                }
+            }
+            outputIdx = mediaCodec?.dequeueOutputBuffer(bufferInfo, 0) ?: break
+        }
+        return Pair(started, trackIndex)
+    }
+
+    // ----------------------------------------------------------------
+    // drain 直到 EOS
+    // ----------------------------------------------------------------
+    private fun drainUntilEOS(
+        bufferInfo: MediaCodec.BufferInfo,
+        muxerStarted: Boolean,
+        audioTrackIndex: Int
+    ) {
+        var started = muxerStarted
+        var trackIndex = audioTrackIndex
+        var eosReached = false
+        while (!eosReached) {
+            val outputIdx = mediaCodec?.dequeueOutputBuffer(bufferInfo, 10_000) ?: break
+            when {
+                outputIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    if (!started) {
+                        trackIndex = mediaMuxer!!.addTrack(mediaCodec!!.outputFormat)
+                        mediaMuxer!!.start()
+                        started = true
+                    }
+                }
+                outputIdx >= 0 -> {
+                    val outputBuf = mediaCodec?.getOutputBuffer(outputIdx)
+                    if (outputBuf != null && started &&
+                        (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) &&
+                        bufferInfo.size > 0
+                    ) {
+                        mediaMuxer?.writeSampleData(trackIndex, outputBuf, bufferInfo)
+                    }
+                    mediaCodec?.releaseOutputBuffer(outputIdx, false)
+                    if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                        eosReached = true
+                    }
+                }
+                else -> eosReached = true
+            }
+        }
+        try { mediaMuxer?.stop(); mediaMuxer?.release() } catch (_: Exception) {}
+        mediaMuxer = null
+    }
+
+    private fun setupEncoder(filePath: String) {
+        try { mediaCodec?.stop(); mediaCodec?.release() } catch (_: Exception) {}
+        try { mediaMuxer?.stop(); mediaMuxer?.release() } catch (_: Exception) {}
+        
+        val mime = MediaFormat.MIMETYPE_AUDIO_AAC
+        val format = MediaFormat.createAudioFormat(mime, SAMPLE_RATE, 2).apply {
+            setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+            setInteger(MediaFormat.KEY_BIT_RATE, 192_000)
+            setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16384)
+        }
+        mediaCodec = MediaCodec.createEncoderByType(mime)
+        mediaCodec?.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        mediaCodec?.start()
+        mediaMuxer = MediaMuxer(filePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+    }
+
+    private fun nextFilePath(): String {
+        val dir = java.io.File(outputDir)
+        if (!dir.exists()) dir.mkdirs()
+        val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault())
+            .format(java.util.Date())
+        val nanoTime = System.nanoTime() % 1000000
+        return java.io.File(dir, "录音${fileIndex}_${stamp}_${nanoTime}.m4a").absolutePath
+    }
+
+    private fun notifyFileSplit(savedPath: String) {
+        // 延迟检查文件大小，确保文件完全写入
+        // 延迟足够长的时间确保 MediaMuxer 完全写入数据
+        handler.postDelayed({
+            val file = java.io.File(savedPath)
+            val fileSize = if (file.exists()) file.length() else 0L
+
+            // 检查文件大小是否满足最小要求
+            if (minFileSizeBytes > 0 && fileSize < minFileSizeBytes) {
+                file.delete()
+                return@postDelayed
+            }
+
+            sendBroadcast(Intent(ACTION_FILE_SPLIT).apply {
+                putExtra(EXTRA_FILE_PATH, savedPath)
+            })
+        }, 2000)
+    }
+
+    private fun stopCapture() {
+        isRecording = false
+        recordingThread?.join(4000)
+        recordingThread = null
+    }
+
+    private var muxerStartedForLastFile = false
+    private var audioTrackIndexForLastFile = -1
+    private var finalPresentationTimeUs = 0L
+
+    private fun releaseResources() {
+        try { audioRecord?.stop(); audioRecord?.release() } catch (_: Exception) {}
+        audioRecord = null
+        try { mediaProjection?.stop() } catch (_: Exception) {}
+        mediaProjection = null
+
+        // 如果正在录音且有有效数据，保存最后文件
+        if (isRecordingStarted && currentFilePath.isNotEmpty() && mediaCodec != null) {
+            val recordingDuration = SystemClock.elapsedRealtime() - audioStartTime
+            if (recordingDuration > 3000) {
+                // 发送 EOS 并 drain 所有剩余数据
+                val eosIdx = mediaCodec?.dequeueInputBuffer(10_000) ?: -1
+                if (eosIdx >= 0) {
+                    mediaCodec?.queueInputBuffer(eosIdx, 0, 0, finalPresentationTimeUs,
+                        MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                }
+                val bufferInfo = MediaCodec.BufferInfo()
+                drainUntilEOS(bufferInfo, muxerStartedForLastFile, audioTrackIndexForLastFile)
+                notifyFileSplit(currentFilePath)
+            } else {
+                // 录音时间太短，删除空文件
+                java.io.File(currentFilePath).delete()
+            }
+        }
+
+        isRecordingStarted = false
+
+        handler.post {
+            sendBroadcast(Intent(ACTION_RECORDING_STOPPED).apply {
+                putExtra(EXTRA_FILE_PATH, currentFilePath)
+            })
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(CHANNEL_ID, "音频录制",
+                NotificationManager.IMPORTANCE_LOW).apply {
+                description = "系统内录服务通知"
+                setSound(null, null)
+            }
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
+    }
+
+    private fun buildNotification(content: String): Notification {
+        val stopIntent = PendingIntent.getService(this, 0,
+            Intent(this, AudioCaptureService::class.java).apply { action = ACTION_STOP },
+            PendingIntent.FLAG_IMMUTABLE)
+        val splitIntent = PendingIntent.getService(this, 1,
+            Intent(this, AudioCaptureService::class.java).apply { action = ACTION_SPLIT },
+            PendingIntent.FLAG_IMMUTABLE)
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("🎵 系统音频录制")
+            .setContentText(content)
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .addAction(android.R.drawable.ic_media_next, "✂️ 手动分割", splitIntent)
+            .addAction(android.R.drawable.ic_media_pause, "⏹ 停止", stopIntent)
+            .setOngoing(true)
+            .setSilent(true)
+            .build()
+    }
+
+    private fun sendError(msg: String) {
+        handler.post {
+            sendBroadcast(Intent(ACTION_ERROR).apply { putExtra(EXTRA_ERROR_MSG, msg) })
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
+    }
+
+    override fun onDestroy() {
+        isRecording = false
+        super.onDestroy()
+    }
+}
+
+```
+
+────────────────────────────────────────────────────────────────────────────────
+[009] app/src/main/java/com/audiocapture/MainActivity.kt
+────────────────────────────────────────────────────────────────────────────────
+```kotlin
+package com.audiocapture
+
+import android.Manifest
+import android.app.Activity
+import android.content.*
+import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
+import android.os.*
+import android.widget.*
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import com.audiocapture.databinding.ActivityMainBinding
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
+
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var binding: ActivityMainBinding
+    private lateinit var mediaProjectionManager: MediaProjectionManager
+
+    private var isRecording = false
+    private var recordingStartTime = 0L
+    private val handler = Handler(Looper.getMainLooper())
+    private var timerRunnable: Runnable? = null
+
+    // 静音检测设置
+    private var silenceEnabled = true
+    private var silenceThresholdMs = 500L  // 默认0.5秒
+
+    // 最小文件大小设置（字节），默认 1MB
+    private var minFileSizeBytes = 1 * 1024 * 1024L
+    private val minFileSizeOptions = arrayOf("不限制", "5 KB", "10 KB", "20 KB", "50 KB", "100 KB", "1 兆")
+    private val minFileSizeValues = longArrayOf(0, 5 * 1024L, 10 * 1024L, 20 * 1024L, 50 * 1024L, 100 * 1024L, 1 * 1024 * 1024L)
+
+    // 已分割的文件列表
+    private val splitFiles = mutableListOf<String>()
+    private var hasRecordingStarted = false  // 标记是否真正开始过录音
+
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        if (permissions.values.all { it }) startMediaProjection()
+        else showToast("需要录音权限才能继续")
+    }
+
+    private val mediaProjectionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            startRecordingService(result.resultCode, result.data!!)
+        } else {
+            showToast("未授权屏幕录制，无法捕获系统音频")
+        }
+    }
+
+    private val serviceReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                AudioCaptureService.ACTION_RECORDING_STARTED -> {
+                    isRecording = true
+                    splitFiles.clear()
+                    hasRecordingStarted = true
+                    updateUI()
+                    startTimer()
+                }
+                AudioCaptureService.ACTION_RECORDING_STOPPED -> {
+                    isRecording = false
+                    updateUI()
+                    stopTimer()
+                    if (hasRecordingStarted) {
+                        hasRecordingStarted = false
+                        val path = intent.getStringExtra(AudioCaptureService.EXTRA_FILE_PATH)
+                        if (path != null) splitFiles.add(path)
+                        refreshRecordingList()
+                        showToast("录音已停止，共保存 ${splitFiles.size} 个文件")
+                    }
+                }
+                AudioCaptureService.ACTION_FILE_SPLIT -> {
+                    val path = intent.getStringExtra(AudioCaptureService.EXTRA_FILE_PATH)
+                    if (path != null) {
+                        splitFiles.add(path)
+                        binding.tvLastFile.text = "已分割：${File(path).name}"
+                        binding.tvSplitCount.text = "已分割 ${splitFiles.size} 个文件"
+                        showToast("✂️ 已保存：${File(path).name}")
+                    }
+                }
+                AudioCaptureService.ACTION_ERROR -> {
+                    val msg = intent.getStringExtra(AudioCaptureService.EXTRA_ERROR_MSG) ?: "未知错误"
+                    showToast("错误：$msg")
+                    isRecording = false
+                    updateUI()
+                    stopTimer()
+                }
+            }
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        binding = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+
+        mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE)
+                as MediaProjectionManager
+
+        setupUI()
+        refreshRecordingList()
+
+        val filter = IntentFilter().apply {
+            addAction(AudioCaptureService.ACTION_RECORDING_STARTED)
+            addAction(AudioCaptureService.ACTION_RECORDING_STOPPED)
+            addAction(AudioCaptureService.ACTION_FILE_SPLIT)
+            addAction(AudioCaptureService.ACTION_ERROR)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(serviceReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(serviceReceiver, filter)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        unregisterReceiver(serviceReceiver)
+        stopTimer()
+    }
+
+    private fun setupUI() {
+        // 开始/停止录音
+        binding.btnRecord.setOnClickListener {
+            if (isRecording) stopRecording() else checkPermissionsAndStart()
+        }
+
+        // 手动分割
+        binding.btnSplit.setOnClickListener {
+            if (isRecording) {
+                val serviceIntent = Intent(this, AudioCaptureService::class.java).apply {
+                    action = AudioCaptureService.ACTION_SPLIT
+                }
+                startService(serviceIntent)
+                showToast("✂️ 手动分割中...")
+            } else {
+                showToast("请先开始录音")
+            }
+        }
+
+        // 静音检测开关
+        binding.switchSilence.isChecked = silenceEnabled
+        binding.switchSilence.setOnCheckedChangeListener { _, checked ->
+            silenceEnabled = checked
+            binding.layoutSilenceConfig.visibility =
+                if (checked) android.view.View.VISIBLE else android.view.View.GONE
+        }
+
+        // 静音时长设置
+        binding.btnSilenceConfig.setOnClickListener {
+            showSilenceConfigDialog()
+        }
+
+        // 最小文件大小设置
+        binding.btnMinFileSize.setOnClickListener {
+            showMinFileSizeDialog()
+        }
+        updateMinFileSizeLabel()
+
+        updateSilenceLabel()
+        updateUI()
+    }
+
+    private fun showSilenceConfigDialog() {
+        val options = arrayOf("0.5 秒", "1 秒", "1.5 秒（默认）", "2 秒", "3 秒", "5 秒")
+        val values = longArrayOf(500, 1000, 1500, 2000, 3000, 5000)
+        val currentIndex = values.indexOfFirst { it == silenceThresholdMs }.coerceAtLeast(2)
+
+        AlertDialog.Builder(this)
+            .setTitle("静音触发间隔")
+            .setSingleChoiceItems(options, currentIndex) { dialog, which ->
+                silenceThresholdMs = values[which]
+                updateSilenceLabel()
+                dialog.dismiss()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun updateSilenceLabel() {
+        val label = when (silenceThresholdMs) {
+            500L -> "0.5 秒"
+            1000L -> "1 秒"
+            1500L -> "1.5 秒"
+            2000L -> "2 秒"
+            3000L -> "3 秒"
+            5000L -> "5 秒"
+            else -> "${silenceThresholdMs}ms"
+        }
+        binding.btnSilenceConfig.text = "静音间隔：$label"
+    }
+
+    private fun showMinFileSizeDialog() {
+        val currentIndex = minFileSizeValues.indexOfFirst { it == minFileSizeBytes }.coerceAtLeast(0)
+
+        AlertDialog.Builder(this)
+            .setTitle("最小文件大小")
+            .setSingleChoiceItems(minFileSizeOptions, currentIndex) { dialog, which ->
+                minFileSizeBytes = minFileSizeValues[which]
+                updateMinFileSizeLabel()
+                dialog.dismiss()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun updateMinFileSizeLabel() {
+        binding.btnMinFileSize.text = minFileSizeOptions[
+            minFileSizeValues.indexOfFirst { it == minFileSizeBytes }.coerceAtLeast(0)
+        ]
+    }
+
+    private fun checkPermissionsAndStart() {
+        val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        val notGranted = permissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (notGranted.isEmpty()) startMediaProjection()
+        else permissionLauncher.launch(notGranted.toTypedArray())
+    }
+
+    private fun startMediaProjection() {
+        mediaProjectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+    }
+
+    private fun startRecordingService(resultCode: Int, data: Intent) {
+        val outputDir = getOutputDir().absolutePath
+        val serviceIntent = Intent(this, AudioCaptureService::class.java).apply {
+            action = AudioCaptureService.ACTION_START
+            putExtra(AudioCaptureService.EXTRA_RESULT_CODE, resultCode)
+            putExtra(AudioCaptureService.EXTRA_DATA, data)
+            putExtra(AudioCaptureService.EXTRA_OUTPUT_DIR, outputDir)
+            putExtra(AudioCaptureService.EXTRA_SILENCE_MS, silenceThresholdMs)
+            putExtra(AudioCaptureService.EXTRA_SILENCE_ENABLED, silenceEnabled)
+            putExtra(AudioCaptureService.EXTRA_MIN_FILE_SIZE, minFileSizeBytes)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
+    }
+
+    private fun stopRecording() {
+        startService(Intent(this, AudioCaptureService::class.java).apply {
+            action = AudioCaptureService.ACTION_STOP
+        })
+    }
+
+    private fun updateUI() {
+        if (isRecording) {
+            binding.btnRecord.text = "⏹ 停止录音"
+            binding.btnRecord.setBackgroundColor(getColor(R.color.stop_color))
+            binding.btnSplit.isEnabled = true
+            binding.btnSplit.alpha = 1f
+            binding.tvStatus.text = "● 正在录制系统音频..."
+            binding.tvStatus.setTextColor(getColor(R.color.recording_color))
+            binding.waveView.startAnimation()
+            binding.layoutSettings.visibility = android.view.View.GONE
+            binding.tvSplitCount.text = "已分割 0 个文件"
+            binding.tvSplitCount.visibility = android.view.View.VISIBLE
+        } else {
+            binding.btnRecord.text = "● 开始录音"
+            binding.btnRecord.setBackgroundColor(getColor(R.color.start_color))
+            binding.btnSplit.isEnabled = false
+            binding.btnSplit.alpha = 0.4f
+            binding.tvStatus.text = "准备就绪"
+            binding.tvStatus.setTextColor(getColor(R.color.ready_color))
+            binding.waveView.stopAnimation()
+            binding.tvTimer.text = "00:00"
+            binding.layoutSettings.visibility = android.view.View.VISIBLE
+            binding.tvSplitCount.visibility = android.view.View.GONE
+        }
+    }
+
+    private fun startTimer() {
+        recordingStartTime = SystemClock.elapsedRealtime()
+        timerRunnable = object : Runnable {
+            override fun run() {
+                val elapsed = SystemClock.elapsedRealtime() - recordingStartTime
+                val seconds = (elapsed / 1000).toInt()
+                binding.tvTimer.text = String.format("%02d:%02d", seconds / 60, seconds % 60)
+                handler.postDelayed(this, 500)
+            }
+        }
+        timerRunnable?.let { handler.post(it) }
+    }
+
+    private fun stopTimer() {
+        timerRunnable?.let { handler.removeCallbacks(it) }
+        timerRunnable = null
+    }
+
+    private fun refreshRecordingList() {
+        val dir = getOutputDir()
+        val files = dir.listFiles { f -> f.name.endsWith(".m4a") }
+            ?.sortedByDescending { it.lastModified() } ?: emptyList()
+        binding.tvRecordingCount.text = "共 ${files.size} 个录音文件"
+        if (files.isNotEmpty()) {
+            binding.tvLastFile.text = "最新：${files.first().name}"
+        } else {
+            binding.tvLastFile.text = "尚无录音"
+        }
+    }
+
+    private fun getOutputDir(): File {
+        val dir = File(getExternalFilesDir(null), "Recordings")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    private fun showToast(msg: String) {
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+    }
+}
+
+```
+
+────────────────────────────────────────────────────────────────────────────────
+[010] app/src/main/java/com/audiocapture/WaveformView.kt
+────────────────────────────────────────────────────────────────────────────────
+```kotlin
+package com.audiocapture
+
+import android.content.Context
+import android.graphics.*
+import android.util.AttributeSet
+import android.view.View
+import kotlin.math.sin
+import kotlin.random.Random
+
+/**
+ * 录音时显示的动态波形动画
+ */
+class WaveformView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null
+) : View(context, attrs) {
+
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+        strokeCap = Paint.Cap.ROUND
+    }
+
+    private var phase = 0f
+    private var amplitude = 0f
+    private var targetAmplitude = 0f
+    private var isAnimating = false
+
+    private val runnable = object : Runnable {
+        override fun run() {
+            phase += 0.08f
+            // 平滑振幅过渡
+            amplitude += (targetAmplitude - amplitude) * 0.1f
+            // 随机抖动模拟真实音频
+            targetAmplitude = if (isAnimating) {
+                0.5f + Random.nextFloat() * 0.5f
+            } else {
+                0f
+            }
+            invalidate()
+            if (isAnimating || amplitude > 0.01f) {
+                postDelayed(this, 16)
+            }
+        }
+    }
+
+    fun startAnimation() {
+        isAnimating = true
+        targetAmplitude = 0.8f
+        removeCallbacks(runnable)
+        post(runnable)
+    }
+
+    fun stopAnimation() {
+        isAnimating = false
+        targetAmplitude = 0f
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        if (amplitude < 0.01f) return
+
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val centerY = h / 2f
+
+        // 绘制 3 条不同频率的波形叠加
+        val waves = listOf(
+            Triple(1f, 1.0f, Color.parseColor("#FF4444")),
+            Triple(2f, 0.5f, Color.parseColor("#FF8888")),
+            Triple(0.5f, 0.7f, Color.parseColor("#FFAAAA"))
+        )
+
+        waves.forEach { (freq, ampFactor, color) ->
+            paint.color = color
+            paint.alpha = (180 * amplitude).toInt().coerceIn(0, 255)
+
+            val path = Path()
+            val steps = 120
+            for (i in 0..steps) {
+                val x = w * i / steps
+                val normalX = i.toFloat() / steps
+                val y = centerY + centerY * 0.6f * amplitude * ampFactor *
+                        sin((normalX * Math.PI * 4 * freq + phase).toFloat()).toFloat()
+                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            canvas.drawPath(path, paint)
+        }
+    }
+}
+
+```
+
+────────────────────────────────────────────────────────────────────────────────
+[011] app/src/main/res/layout/activity_main.xml
+────────────────────────────────────────────────────────────────────────────────
+```
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/background"
+    android:fillViewport="true">
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingBottom="32dp">
+
+        <!-- 标题 -->
+        <TextView
+            android:id="@+id/tvTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="系统音频录制"
+            android:textSize="26sp"
+            android:textStyle="bold"
+            android:textColor="@color/title_color"
+            android:layout_marginTop="48dp"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent" />
+
+        <TextView
+            android:id="@+id/tvSubtitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="录制手机播放的任何声音"
+            android:textSize="14sp"
+            android:textColor="@color/subtitle_color"
+            android:layout_marginTop="6dp"
+            app:layout_constraintTop_toBottomOf="@id/tvTitle"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent" />
+
+        <!-- 状态卡片 -->
+        <androidx.cardview.widget.CardView
+            xmlns:card_view="http://schemas.android.com/apk/res-auto"
+            android:id="@+id/cardStatus"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginHorizontal="24dp"
+            android:layout_marginTop="28dp"
+            card_view:cardCornerRadius="20dp"
+            card_view:cardElevation="8dp"
+            card_view:cardBackgroundColor="@color/card_background"
+            app:layout_constraintTop_toBottomOf="@id/tvSubtitle"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="24dp"
+                android:gravity="center">
+
+                <TextView
+                    android:id="@+id/tvStatus"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="准备就绪"
+                    android:textSize="15sp"
+                    android:textColor="@color/ready_color" />
+
+                <TextView
+                    android:id="@+id/tvTimer"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="00:00"
+                    android:textSize="52sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/title_color"
+                    android:fontFamily="monospace"
+                    android:layout_marginTop="4dp" />
+
+                <com.audiocapture.WaveformView
+                    android:id="@+id/waveView"
+                    android:layout_width="match_parent"
+                    android:layout_height="56dp"
+                    android:layout_marginTop="8dp" />
+
+                <!-- 分割计数（录制中显示） -->
+                <TextView
+                    android:id="@+id/tvSplitCount"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="已分割 0 个文件"
+                    android:textSize="13sp"
+                    android:textColor="@color/accent"
+                    android:layout_marginTop="6dp"
+                    android:visibility="gone" />
+
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <!-- 开始/停止按钮 -->
+        <Button
+            android:id="@+id/btnRecord"
+            android:layout_width="0dp"
+            android:layout_height="60dp"
+            android:layout_marginHorizontal="24dp"
+            android:layout_marginTop="20dp"
+            android:text="● 开始录音"
+            android:textSize="17sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF"
+            android:backgroundTint="@color/start_color"
+            android:stateListAnimator="@null"
+            style="@style/Widget.MaterialComponents.Button"
+            app:cornerRadius="16dp"
+            app:layout_constraintTop_toBottomOf="@id/cardStatus"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent" />
+
+        <!-- 手动分割按钮 -->
+        <Button
+            android:id="@+id/btnSplit"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_marginHorizontal="24dp"
+            android:layout_marginTop="10dp"
+            android:text="✂️ 手动分割新文件"
+            android:textSize="15sp"
+            android:textColor="@color/title_color"
+            android:backgroundTint="@color/card_background"
+            android:enabled="false"
+            android:alpha="0.4"
+            android:stateListAnimator="@null"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            app:cornerRadius="14dp"
+            app:layout_constraintTop_toBottomOf="@id/btnRecord"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent" />
+
+        <!-- 设置区域（录制时隐藏） -->
+        <LinearLayout
+            android:id="@+id/layoutSettings"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginHorizontal="24dp"
+            android:layout_marginTop="16dp"
+            app:layout_constraintTop_toBottomOf="@id/btnSplit"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent">
+
+            <!-- 静音检测卡片 -->
+            <androidx.cardview.widget.CardView
+                xmlns:card_view="http://schemas.android.com/apk/res-auto"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                card_view:cardCornerRadius="16dp"
+                card_view:cardElevation="4dp"
+                card_view:cardBackgroundColor="@color/card_background">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="18dp">
+
+                    <!-- 开关行 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="静音自动分割"
+                                android:textSize="15sp"
+                                android:textStyle="bold"
+                                android:textColor="@color/title_color" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="检测到静音时自动保存新文件"
+                                android:textSize="12sp"
+                                android:textColor="@color/subtitle_color"
+                                android:layout_marginTop="2dp" />
+
+                        </LinearLayout>
+
+                        <androidx.appcompat.widget.SwitchCompat
+                            android:id="@+id/switchSilence"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:checked="true" />
+
+                    </LinearLayout>
+
+                    <!-- 间隔设置（开关开启时显示） -->
+                    <LinearLayout
+                        android:id="@+id/layoutSilenceConfig"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:layout_marginTop="12dp">
+
+                        <Button
+                            android:id="@+id/btnSilenceConfig"
+                            android:layout_width="match_parent"
+                            android:layout_height="44dp"
+                            android:text="静音间隔：1.5 秒"
+                            android:textSize="14sp"
+                            android:textColor="@color/accent"
+                            android:backgroundTint="#2A1E2130"
+                            android:stateListAnimator="@null"
+                            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                            app:cornerRadius="10dp" />
+
+                    </LinearLayout>
+
+                </LinearLayout>
+            </androidx.cardview.widget.CardView>
+
+            <!-- 最小文件大小卡片 -->
+            <androidx.cardview.widget.CardView
+                xmlns:card_view="http://schemas.android.com/apk/res-auto"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                card_view:cardCornerRadius="16dp"
+                card_view:cardElevation="4dp"
+                card_view:cardBackgroundColor="@color/card_background">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="18dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="最小文件大小"
+                        android:textSize="15sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/title_color" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="小于此大小的文件不保存"
+                        android:textSize="12sp"
+                        android:textColor="@color/subtitle_color"
+                        android:layout_marginTop="2dp" />
+
+                    <Button
+                        android:id="@+id/btnMinFileSize"
+                        android:layout_width="match_parent"
+                        android:layout_height="44dp"
+                        android:layout_marginTop="12dp"
+                        android:text="10 KB"
+                        android:textSize="14sp"
+                        android:textColor="@color/accent"
+                        android:backgroundTint="#2A1E2130"
+                        android:stateListAnimator="@null"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        app:cornerRadius="10dp" />
+
+                </LinearLayout>
+            </androidx.cardview.widget.CardView>
+
+        </LinearLayout>
+
+        <!-- 文件信息卡片 -->
+        <androidx.cardview.widget.CardView
+            xmlns:card_view="http://schemas.android.com/apk/res-auto"
+            android:id="@+id/cardFiles"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginHorizontal="24dp"
+            android:layout_marginTop="12dp"
+            card_view:cardCornerRadius="16dp"
+            card_view:cardElevation="4dp"
+            card_view:cardBackgroundColor="@color/card_background"
+            app:layout_constraintTop_toBottomOf="@id/layoutSettings"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="18dp">
+
+                <TextView
+                    android:id="@+id/tvRecordingCount"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="共 0 个录音文件"
+                    android:textSize="13sp"
+                    android:textColor="@color/subtitle_color" />
+
+                <TextView
+                    android:id="@+id/tvLastFile"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="尚无录音"
+                    android:textSize="12sp"
+                    android:textColor="@color/subtitle_color"
+                    android:layout_marginTop="3dp"
+                    android:ellipsize="end"
+                    android:maxLines="1" />
+
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <!-- 底部说明 -->
+        <TextView
+            android:id="@+id/tvHint"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:text="⚠️ 部分音乐App（如Spotify）可能禁止被录制\n录音保存至 Android/data/com.audiocapture/files/Recordings"
+            android:textSize="11sp"
+            android:textColor="@color/hint_color"
+            android:gravity="center"
+            android:layout_marginHorizontal="24dp"
+            android:layout_marginTop="16dp"
+            app:layout_constraintTop_toBottomOf="@id/cardFiles"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent" />
+
+    </androidx.constraintlayout.widget.ConstraintLayout>
+</ScrollView>
+
+```
+
+────────────────────────────────────────────────────────────────────────────────
+[012] app/src/main/res/mipmap-hdpi/ic_launcher.xml
+────────────────────────────────────────────────────────────────────────────────
+```
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/accent"/>
+    <foreground>
+        <inset android:drawable="@android:drawable/ic_btn_speak_now"
+               android:insetLeft="20dp"
+               android:insetTop="20dp"
+               android:insetRight="20dp"
+               android:insetBottom="20dp"/>
+    </foreground>
+</adaptive-icon>
+
+```
+
+────────────────────────────────────────────────────────────────────────────────
+[013] app/src/main/res/values/colors.xml
+────────────────────────────────────────────────────────────────────────────────
+```
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="background">#0F1117</color>
+    <color name="card_background">#1E2130</color>
+    <color name="title_color">#FFFFFF</color>
+    <color name="subtitle_color">#8890A4</color>
+    <color name="hint_color">#555F72</color>
+    <color name="start_color">#E84343</color>
+    <color name="stop_color">#444D60</color>
+    <color name="recording_color">#FF4444</color>
+    <color name="ready_color">#8890A4</color>
+    <color name="accent">#E84343</color>
+</resources>
+
+```
+
+────────────────────────────────────────────────────────────────────────────────
+[014] app/src/main/res/values/strings.xml
+────────────────────────────────────────────────────────────────────────────────
+```
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">系统录音</string>
+</resources>
+
+```
+
+────────────────────────────────────────────────────────────────────────────────
+[015] app/src/main/res/values/themes.xml
+────────────────────────────────────────────────────────────────────────────────
+```
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.AudioCapture" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorPrimaryVariant">@color/start_color</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="android:windowBackground">@color/background</item>
+        <item name="android:statusBarColor">@color/background</item>
+        <item name="android:navigationBarColor">@color/background</item>
+    </style>
+</resources>
+
+```
+
+────────────────────────────────────────────────────────────────────────────────
+[016] gradle/wrapper/gradle-wrapper.properties
+────────────────────────────────────────────────────────────────────────────────
+```
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.5-bin.zip
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+
+```
+
